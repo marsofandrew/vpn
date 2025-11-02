@@ -1,0 +1,8 @@
+version: '3'
+services:
+  vpn:
+    build: .
+    ports:
+      - "443:443"
+    volumes:
+      - ./config.json:/config.json
