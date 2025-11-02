@@ -10,8 +10,8 @@ def generate_keys():
     private_key = x25519.X25519PrivateKey.generate()
     public_key = private_key.public_key()
     return {
-        "private_key": private_key.private_bytes_raw().hex(),
-        "public_key": public_key.public_bytes_raw().hex()
+        "private_key": base64.b64encode(private_key.private_bytes_raw()).decode('utf-8'),
+        "public_key": base64.b64encode(public_key.public_bytes_raw()).decode('utf-8')
     }
 
 def main():
