@@ -1,69 +1,45 @@
-
+#!/usr/bin/env python3
 import argparse
-import json
-import uuid
-import secrets
-from cryptography.hazmat.primitives.asymmetric import x25519
-import base64
+import sys
 
-def generate_keys():
-    private_key = x25519.X25519PrivateKey.generate()
-    public_key = private_key.public_key()
-    return {
-        "private_key": base64.urlsafe_b64encode(private_key.private_bytes_raw()).rstrip(b'=').decode('utf-8'),
-        "public_key": base64.urlsafe_b64encode(public_key.public_bytes_raw()).rstrip(b'=').decode('utf-8')
-    }
+import vpnctl
 
-def main():
-    parser = argparse.ArgumentParser(description="Set up the VPN server configuration.")
-    parser.add_argument("--default-domain", required=True, help="The default domain for client emails.")
-    parser.add_argument("--dest", required=True, help="The destination server for REALITY.")
-    parser.add_argument("--client-names", nargs='+', required=True, help="A list of initial client names.")
-    parser.add_argument("--output-file", default="vpn_config.json", help="The path to store the generated keys and configuration.")
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Compatibility wrapper for vpnctl init. Prefer using vpnctl.py directly."
+    )
+    parser.add_argument("--default-domain", required=True)
+    parser.add_argument("--dest", required=True, help="REALITY target, for example www.cloudflare.com:443.")
+    parser.add_argument("--server-host", default="127.0.0.1", help="Public host clients connect to.")
+    parser.add_argument("--client-names", nargs="+", required=True)
+    parser.add_argument("--output-file", default="data/vpn_state.json")
+    parser.add_argument("--config-file", default="data/config.json")
+    parser.add_argument("--quota")
+    parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
-    keys = generate_keys()
-    short_id = secrets.token_hex(8)
-
-    clients = []
-    for name in args.client_names:
-        clients.append({
-            "name": name,
-            "id": str(uuid.uuid4())
-        })
-
-    with open("template_config.json", "r") as f:
-        config_template = json.load(f)
-
-    config_template["inbounds"][0]["settings"]["clients"] = [
-        {
-            "id": client["id"],
-            "email": f"{client['name']}@{args.default_domain}",
-            "flow": "xtls-rprx-vision"
-        } for client in clients
+    argv = [
+        "--state",
+        args.output_file,
+        "--config",
+        args.config_file,
+        "init",
+        "--server-host",
+        args.server_host,
+        "--reality-target",
+        args.dest,
+        "--default-domain",
+        args.default_domain,
     ]
-    config_template["inbounds"][0]["streamSettings"]["realitySettings"]["privateKey"] = keys["private_key"]
-    config_template["inbounds"][0]["streamSettings"]["realitySettings"]["shortIds"] = [short_id]
-    config_template["inbounds"][0]["streamSettings"]["realitySettings"]["dest"] = args.dest
-    config_template["inbounds"][0]["streamSettings"]["realitySettings"]["serverNames"] = [args.dest.split(':')[0]]
+    for client_name in args.client_names:
+        argv.extend(["--client", client_name])
+    if args.quota:
+        argv.extend(["--quota", args.quota])
+    if args.force:
+        argv.append("--force")
+    return vpnctl.main(argv)
 
-
-    with open("config.json", "w") as f:
-        json.dump(config_template, f, indent=2)
-
-    vpn_config = {
-        "keys": keys,
-        "short_id": short_id,
-        "clients": clients,
-        "default_domain": args.default_domain,
-        "dest": args.dest
-    }
-
-    with open(args.output_file, "w") as f:
-        json.dump(vpn_config, f, indent=2)
-
-    print(f"Configuration saved to {args.output_file}")
-    print(f"Server config updated in config.json")
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -1,91 +1,232 @@
+# Xray VLESS + REALITY VPN Setup
 
-# VPN Setup with Xray-core
+Provision and manage a Docker Compose based Xray VPN server using VLESS + REALITY.
 
-This project provides a set of Python scripts to easily set up and manage a VPN server using Xray-core with VLESS and REALITY protocols, running inside a Docker container.
+The repo includes:
 
-## Prerequisites
+- `vpnctl.py`: one CLI for setup, runtime control, clients, links, QR codes, usage, and monthly quotas
+- `docker-compose.yaml`: Xray runtime using the official `ghcr.io/xtls/xray-core` image
+- `scripts/install-host.sh`: Ubuntu/Debian host bootstrap with Docker's official apt repository, firewall, and quota timer setup
+- legacy wrappers for the old `setup_vpn_server.py` and `change_vpn_server.py` entrypoints
 
-- Python 3
-- Docker and Docker Compose
-- Required Python libraries:
-  ```bash
-  pip install qrcode cryptography
-  ```
+Generated secrets and runtime config live under `data/` and are ignored by git.
 
-## Setup
+## Quick Start
 
-1.  **Initial Server Setup**
-
-    The `setup_vpn_server.py` script generates the initial server configuration, keys, and client UUIDs.
-
-    **Usage:**
-
-    ```bash
-    python setup_vpn_server.py --default-domain <your-domain> --dest <destination-server> --client-names <client1> <client2> ...
-    ```
-
-    **Arguments:**
-
-    - `--default-domain`: The domain to be used for client emails (e.g., `example.com`).
-    - `--dest`: The destination server for REALITY (e.g., `www.google.com:443`).
-    - `--client-names`: A space-separated list of initial client names.
-    - `--output-file` (optional): The path to store the generated keys and configuration. Defaults to `vpn_config.json`.
-
-    **Example:**
-
-    ```bash
-    python setup_vpn_server.py --default-domain myvpn.com --dest www.amazon.com:443 --client-names user1 user2
-    ```
-
-    This will:
-    - Create `config.json` with the server configuration.
-    - Create `vpn_config.json` to store keys, the short ID, and client information for future management.
-
-2.  **Build and Run the Docker Container**
-
-    ```bash
-    docker-compose up --build -d
-    ```
-
-## Management
-
-The `change_vpn_server.py` script allows you to manage the VPN server configuration after the initial setup.
-
-**Usage:**
+Run these commands on a fresh Ubuntu/Debian VPS.
 
 ```bash
-python change_vpn_server.py [options]
+git clone <this-repo-url>
+cd vpn-setup
+./scripts/install-host.sh
 ```
 
-**Options:**
+Initialize the server state and create initial clients:
 
-- `--config`: The path to the `vpn_config.json` file. Defaults to `vpn_config.json`.
-- `--add-client <name>`: Add a new client with the given name.
-- `--remove-client <name-or-uuid>`: Remove a client by name or UUID.
-- `--get-link <name>`: Generate a VLESS link for an existing client. Requires `--server-ip`.
-- `--qr`: Generate a QR code for the VLESS link.
-- `--qr-folder <path>`: The directory to save the generated QR code. Defaults to the current directory.
-- `--server-ip <ip-address>`: The public IP address of your server. If not provided, the script will attempt to detect it automatically.
+```bash
+python3 vpnctl.py init \
+  --server-host YOUR_SERVER_IP_OR_DOMAIN \
+  --reality-target www.cloudflare.com:443 \
+  --default-domain vpn.local \
+  --client phone \
+  --client laptop \
+  --quota 50GiB
+```
 
-**Examples:**
+`--quota 50GiB` means 50 GiB per calendar month. Usage periods reset on the first day of each UTC month.
 
--   **Add a new client:**
+Start and validate Xray:
 
-    ```bash
-    python change_vpn_server.py --add-client user3
-    ```
-    The script will prompt for confirmation to apply the changes and restart the server.
+```bash
+python3 vpnctl.py up
+python3 vpnctl.py validate
+python3 vpnctl.py status
+```
 
--   **Remove a client:**
+Print a client link or QR code:
 
-    ```bash
-    python change_vpn_server.py --remove-client user1
-    ```
-    The script will prompt for confirmation to apply the changes and restart the server.
+```bash
+python3 vpnctl.py link phone
+python3 vpnctl.py link phone --qr
+```
 
--   **Get a VLESS link and QR code:**
+## Requirements
 
-    ```bash
-    python change_vpn_server.py --get-link user2 --server-ip 123.45.67.89 --qr --qr-folder ./qrcodes
-    ```
-    This will print the VLESS link and save a QR code to `./qrcodes/user2.png`.
+On the server:
+
+- Ubuntu or Debian
+- root or sudo access
+- public TCP `443` reachable from clients
+- Docker Compose plugin, installed from Docker's official apt repository by `scripts/install-host.sh` if missing
+
+For local development without running the host installer:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+## Important Files
+
+- `data/vpn_state.json`: source of truth for private keys, REALITY short ID, clients, monthly quotas, usage period, and usage
+- `data/config.json`: rendered Xray config mounted into the container
+- `qrcodes/`: generated QR code PNG files
+- `.env`: optional Docker Compose overrides such as `XRAY_IMAGE`, `XRAY_PORT`, or `XRAY_CONTAINER_NAME`
+
+Do not commit `data/`, `.env`, QR codes, or any generated state. Losing `data/vpn_state.json` means losing the private keys and client registry for that server.
+
+## Server Commands
+
+```bash
+python3 vpnctl.py up
+python3 vpnctl.py down
+python3 vpnctl.py restart
+python3 vpnctl.py status
+python3 vpnctl.py logs -f
+python3 vpnctl.py validate
+```
+
+If you edit or migrate state manually, re-render the Xray config:
+
+```bash
+python3 vpnctl.py render
+python3 vpnctl.py restart
+```
+
+## Client Management
+
+List clients:
+
+```bash
+python3 vpnctl.py client list
+```
+
+Add a client:
+
+```bash
+python3 vpnctl.py client add tablet --quota 20GiB
+```
+
+Remove a client:
+
+```bash
+python3 vpnctl.py client remove tablet
+```
+
+Disable or re-enable a client:
+
+```bash
+python3 vpnctl.py client disable phone --reason manual
+python3 vpnctl.py client enable phone
+```
+
+Get a connection link:
+
+```bash
+python3 vpnctl.py link phone
+```
+
+Generate a QR code:
+
+```bash
+python3 vpnctl.py link phone --qr --output qrcodes
+```
+
+## Monthly Traffic Quotas
+
+Quotas are monthly calendar quotas. The active period is stored as `YYYY-MM` in UTC. When the first quota/list/usage command runs in a new UTC month, usage counters reset to zero and clients disabled only for `quota_exceeded` are enabled again.
+
+Quotas are enforced by periodically reading Xray user stats, persisting the traffic totals for the active month, and removing over-quota clients from the rendered Xray config.
+
+Set or change a monthly quota:
+
+```bash
+python3 vpnctl.py quota set phone --quota 100GiB
+```
+
+Show persisted monthly usage:
+
+```bash
+python3 vpnctl.py usage
+```
+
+Read current Xray counters before showing monthly usage:
+
+```bash
+python3 vpnctl.py usage --refresh
+```
+
+Manually enforce quotas:
+
+```bash
+python3 vpnctl.py quota enforce
+```
+
+Reset monthly usage and re-enable a client:
+
+```bash
+python3 vpnctl.py quota reset phone --enable
+```
+
+The host installer creates `vpnctl-quota.timer`, which runs quota enforcement every 5 minutes.
+
+Useful systemd commands:
+
+```bash
+systemctl status vpnctl-quota.timer
+journalctl -u vpnctl-quota.service -n 100 --no-pager
+```
+
+## Legacy Script Compatibility
+
+The previous script names are still available as wrappers:
+
+```bash
+python3 setup_vpn_server.py \
+  --server-host YOUR_SERVER_IP_OR_DOMAIN \
+  --default-domain vpn.local \
+  --dest www.cloudflare.com:443 \
+  --client-names phone laptop
+```
+
+```bash
+python3 change_vpn_server.py --add-client tablet
+python3 change_vpn_server.py --get-link phone --qr
+```
+
+Prefer `vpnctl.py` for new usage.
+
+## Troubleshooting
+
+If the container does not start, validate the generated config:
+
+```bash
+python3 vpnctl.py validate
+python3 vpnctl.py logs
+```
+
+If clients cannot connect:
+
+- confirm the VPS firewall and cloud firewall allow TCP `443`
+- confirm `--server-host` is the public IP or DNS name clients use
+- confirm `--reality-target` is reachable from the server
+- regenerate the client link with `python3 vpnctl.py link CLIENT_NAME`
+
+If quota usage stays at zero:
+
+- confirm clients have an `email` in `data/config.json`
+- confirm Xray is running the generated config
+- run `python3 vpnctl.py usage --refresh` and check for errors
+
+If `apt` reports `Unable to locate package docker-compose-plugin`:
+
+- rerun `./scripts/install-host.sh` after pulling the latest repo changes
+- the installer now adds Docker's official apt repository before installing `docker-compose-plugin`
+- if apt reports Docker package conflicts, remove the conflicting distro Docker packages manually and rerun the installer
+
+## Tests
+
+Run the standard-library test suite:
+
+```bash
+python3 -m unittest discover -s tests -v
+```

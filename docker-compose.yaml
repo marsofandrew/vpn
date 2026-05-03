@@ -1,8 +1,14 @@
-version: '3'
 services:
-  vpn:
-    build: .
+  xray:
+    image: ${XRAY_IMAGE:-ghcr.io/xtls/xray-core:latest}
+    container_name: ${XRAY_CONTAINER_NAME:-xray-vless-reality}
+    restart: unless-stopped
     ports:
-      - "443:443"
+      - "${XRAY_PORT:-443}:443/tcp"
     volumes:
-      - ./config.json:/config.json
+      - ./data/config.json:/etc/xray/config.json:ro
+      - xray_logs:/var/log/xray
+    command: ["run", "-config", "/etc/xray/config.json"]
+
+volumes:
+  xray_logs:

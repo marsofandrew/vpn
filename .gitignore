@@ -1,0 +1,10 @@
+data/
+qrcodes/
+*.png
+__pycache__/
+.pytest_cache/
+.coverage
+vpn_config.json
+config.json
+.env
+.idea/
