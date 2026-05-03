@@ -107,6 +107,16 @@ def parse_size(value: str | None) -> int | None:
     return int(float(number_part) * SIZE_UNITS[unit])
 
 
+def parse_port(value: str | int) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError("port must be an integer") from error
+    if port < 1 or port > 65535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
+
+
 def format_size(value: int | None) -> str:
     if value is None:
         return "unlimited"
@@ -163,7 +173,7 @@ def create_state(
         "updated_at": now,
         "usage_period": current_usage_period(),
         "server_host": server_host,
-        "port": port,
+        "port": parse_port(port),
         "default_domain": default_domain,
         "reality_target": reality_target,
         "short_id": os.urandom(8).hex(),
@@ -265,6 +275,7 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
 
 def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> dict[str, Any]:
     reality_host, _ = split_host_port(state["reality_target"])
+    vpn_port = parse_port(state.get("port", DEFAULT_PORT))
     enabled_clients = [
         {
             "id": client["id"],
@@ -304,7 +315,7 @@ def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> di
             {
                 "tag": "vless_reality",
                 "listen": "0.0.0.0",
-                "port": DEFAULT_PORT,
+                "port": vpn_port,
                 "protocol": "vless",
                 "settings": {
                     "clients": enabled_clients,
@@ -386,7 +397,7 @@ def persist_state_and_config(
     save_state(state_path, state)
     render_and_save_config(state, config_path)
     if restart and compose_file is not None:
-        restart_xray(compose_file)
+        restart_xray(compose_file, state)
 
 
 def find_client(state: dict[str, Any], name_or_id: str) -> dict[str, Any] | None:
@@ -437,6 +448,14 @@ def compose_base_command(compose_file: Path) -> list[str]:
     raise VpnctlError("docker compose is not installed")
 
 
+def compose_environment(port: int | None = None) -> dict[str, str] | None:
+    if port is None:
+        return None
+    environment = os.environ.copy()
+    environment["XRAY_PORT"] = str(parse_port(port))
+    return environment
+
+
 def is_docker_permission_error(error: subprocess.CalledProcessError) -> bool:
     text = " ".join(
         part.lower()
@@ -460,7 +479,12 @@ def docker_permission_error() -> VpnctlError:
     )
 
 
-def run_compose(compose_file: Path, args: list[str], capture: bool = False) -> subprocess.CompletedProcess[str]:
+def run_compose(
+    compose_file: Path,
+    args: list[str],
+    capture: bool = False,
+    port: int | None = None,
+) -> subprocess.CompletedProcess[str]:
     command = compose_base_command(compose_file) + args
     try:
         return subprocess.run(
@@ -468,6 +492,7 @@ def run_compose(compose_file: Path, args: list[str], capture: bool = False) -> s
             check=True,
             text=True,
             capture_output=capture,
+            env=compose_environment(port),
         )
     except subprocess.CalledProcessError as error:
         if is_docker_permission_error(error):
@@ -475,11 +500,12 @@ def run_compose(compose_file: Path, args: list[str], capture: bool = False) -> s
         raise
 
 
-def restart_xray(compose_file: Path) -> None:
-    run_compose(compose_file, ["up", "-d", XRAY_SERVICE])
+def restart_xray(compose_file: Path, state: dict[str, Any] | None = None) -> None:
+    port = state.get("port", DEFAULT_PORT) if state else None
+    run_compose(compose_file, ["up", "-d", XRAY_SERVICE], port=port)
 
 
-def query_xray_stats(compose_file: Path, reset: bool) -> dict[str, Any]:
+def query_xray_stats(compose_file: Path, reset: bool, state: dict[str, Any]) -> dict[str, Any]:
     args = [
         "exec",
         "-T",
@@ -493,7 +519,7 @@ def query_xray_stats(compose_file: Path, reset: bool) -> dict[str, Any]:
     ]
     if reset:
         args.append("-reset")
-    completed = run_compose(compose_file, args, capture=True)
+    completed = run_compose(compose_file, args, capture=True, port=state.get("port", DEFAULT_PORT))
     output = completed.stdout.strip()
     if not output:
         return {"stat": []}
@@ -658,7 +684,7 @@ def command_quota_reset(args: argparse.Namespace) -> None:
 def command_quota_enforce(args: argparse.Namespace) -> None:
     state = load_state(args.state)
     period_changed = ensure_monthly_period(state)
-    stats = query_xray_stats(args.compose_file, reset=True)
+    stats = query_xray_stats(args.compose_file, reset=True, state=state)
     changed = False if period_changed else apply_usage_deltas(state, collect_usage_deltas(stats))
     disabled = enforce_quotas(state)
     if period_changed or changed or disabled:
@@ -682,7 +708,7 @@ def command_usage(args: argparse.Namespace) -> None:
     state = load_state(args.state)
     period_changed = ensure_monthly_period(state)
     if args.refresh:
-        stats = query_xray_stats(args.compose_file, reset=True)
+        stats = query_xray_stats(args.compose_file, reset=True, state=state)
         if not period_changed and apply_usage_deltas(state, collect_usage_deltas(stats)):
             period_changed = True
     if period_changed:
@@ -711,7 +737,10 @@ def command_link(args: argparse.Namespace) -> None:
 
 
 def command_compose(args: argparse.Namespace, compose_args: list[str]) -> None:
-    run_compose(args.compose_file, compose_args)
+    port = None
+    if args.state.exists():
+        port = load_state(args.state).get("port", DEFAULT_PORT)
+    run_compose(args.compose_file, compose_args, port=port)
 
 
 def add_common_paths(parser: argparse.ArgumentParser) -> None:
@@ -734,7 +763,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--server-host", required=True, help="Public IP or DNS name clients connect to.")
     init_parser.add_argument("--reality-target", required=True, help="REALITY target, for example www.cloudflare.com:443.")
     init_parser.add_argument("--default-domain", help="Domain used in generated client emails. Defaults to server host.")
-    init_parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Public VLESS port.")
+    init_parser.add_argument("--port", type=parse_port, default=DEFAULT_PORT, help="Public VLESS port.")
     init_parser.add_argument("--client", action="append", required=True, help="Initial client name. Repeatable.")
     init_parser.add_argument("--quota", help="Optional initial monthly quota for all created clients, for example 50GiB.")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing state.")

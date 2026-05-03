@@ -13,9 +13,11 @@ import vpnctl
 class VpnctlTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_current_usage_period = vpnctl.current_usage_period
+        self.original_run_compose = vpnctl.run_compose
 
     def tearDown(self) -> None:
         vpnctl.current_usage_period = self.original_current_usage_period
+        vpnctl.run_compose = self.original_run_compose
 
     def test_render_config_contains_vless_reality_stats_and_api(self) -> None:
         state = vpnctl.create_state(
@@ -78,6 +80,66 @@ class VpnctlTests(unittest.TestCase):
         self.assertEqual(query["sid"], [state["short_id"]])
         self.assertEqual(query["sni"], ["www.cloudflare.com"])
         self.assertEqual(query["flow"], ["xtls-rprx-vision"])
+
+    def test_custom_port_is_rendered_and_used_in_links(self) -> None:
+        state = vpnctl.create_state(
+            server_host="203.0.113.10",
+            reality_target="www.cloudflare.com:443",
+            default_domain="example.com",
+            port=8443,
+            client_names=["phone"],
+            quota_bytes=None,
+        )
+
+        config = vpnctl.render_config(state)
+        link = vpnctl.generate_vless_link(state["clients"][0], state)
+
+        self.assertEqual(config["inbounds"][0]["port"], 8443)
+        self.assertEqual(urlparse(link).port, 8443)
+
+    def test_invalid_port_is_rejected(self) -> None:
+        for port in (0, 65536, "not-a-port"):
+            with self.subTest(port=port):
+                with self.assertRaises(Exception):
+                    vpnctl.parse_port(port)
+
+    def test_compose_command_uses_port_from_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "state.json"
+            config_path = Path(tmp_dir) / "config.json"
+            state = vpnctl.create_state(
+                server_host="203.0.113.10",
+                reality_target="www.cloudflare.com:443",
+                default_domain="example.com",
+                port=8443,
+                client_names=["phone"],
+                quota_bytes=None,
+            )
+            vpnctl.save_state(state_path, state)
+            captured = {}
+
+            def fake_run_compose(compose_file: Path, args: list[str], capture: bool = False, port: int | None = None):
+                captured["compose_file"] = compose_file
+                captured["args"] = args
+                captured["capture"] = capture
+                captured["port"] = port
+
+            vpnctl.run_compose = fake_run_compose
+            args = type(
+                "Args",
+                (),
+                {
+                    "state": state_path,
+                    "config": config_path,
+                    "compose_file": Path("docker-compose.yaml"),
+                },
+            )()
+
+            vpnctl.command_compose(args, ["up", "-d"])
+
+            self.assertEqual(captured["port"], 8443)
+            self.assertEqual(captured["args"], ["up", "-d"])
+            self.assertEqual(vpnctl.compose_environment(captured["port"])["XRAY_PORT"], "8443")
 
     def test_quota_enforcement_accumulates_xray_stats_and_disables_client(self) -> None:
         state = vpnctl.create_state(

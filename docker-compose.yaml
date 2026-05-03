@@ -4,7 +4,7 @@ services:
     container_name: ${XRAY_CONTAINER_NAME:-xray-vless-reality}
     restart: unless-stopped
     ports:
-      - "${XRAY_PORT:-443}:443/tcp"
+      - "${XRAY_PORT:-443}:${XRAY_PORT:-443}/tcp"
     volumes:
       - ./data/config.json:/etc/xray/config.json:ro
       - xray_logs:/var/log/xray

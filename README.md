@@ -7,7 +7,6 @@ The repo includes:
 - `vpnctl.py`: one CLI for setup, runtime control, clients, links, QR codes, usage, and monthly quotas
 - `docker-compose.yaml`: Xray runtime using the official `ghcr.io/xtls/xray-core` image
 - `scripts/install-host.sh`: Ubuntu/Debian host bootstrap with Docker's official apt repository, firewall, and quota timer setup
-- legacy wrappers for the old `setup_vpn_server.py` and `change_vpn_server.py` entrypoints
 
 Generated secrets and runtime config live under `data/` and are ignored by git.
 
@@ -26,6 +25,7 @@ Initialize the server state and create initial clients:
 ```bash
 python3 vpnctl.py init \
   --server-host YOUR_SERVER_IP_OR_DOMAIN \
+  --port 8443 \
   --reality-target www.cloudflare.com:443 \
   --default-domain vpn.local \
   --client phone \
@@ -33,7 +33,7 @@ python3 vpnctl.py init \
   --quota 50GiB
 ```
 
-`--quota 50GiB` means 50 GiB per calendar month. Usage periods reset on the first day of each UTC month.
+`--port` controls the public VPN TCP port and the Xray inbound port. Omit it to use the default `443`. If you use a custom port such as `8443`, open that TCP port in `ufw` and in your cloud firewall. `--quota 50GiB` means 50 GiB per calendar month. Usage periods reset on the first day of each UTC month.
 
 Start and validate Xray:
 
@@ -56,7 +56,7 @@ On the server:
 
 - Ubuntu or Debian
 - root or sudo access
-- public TCP `443` reachable from clients
+- configured public TCP port reachable from clients, default `443`
 - Docker Compose plugin, installed from Docker's official apt repository by `scripts/install-host.sh` if missing
 
 For local development without running the host installer:
@@ -70,7 +70,7 @@ python3 -m pip install -r requirements.txt
 - `data/vpn_state.json`: source of truth for private keys, REALITY short ID, clients, monthly quotas, usage period, and usage
 - `data/config.json`: rendered Xray config mounted into the container
 - `qrcodes/`: generated QR code PNG files
-- `.env`: optional Docker Compose overrides such as `XRAY_IMAGE`, `XRAY_PORT`, or `XRAY_CONTAINER_NAME`
+- `.env`: optional Docker Compose overrides such as `XRAY_IMAGE` or `XRAY_CONTAINER_NAME`
 
 Do not commit `data/`, `.env`, QR codes, or any generated state. Losing `data/vpn_state.json` means losing the private keys and client registry for that server.
 
@@ -176,25 +176,6 @@ systemctl status vpnctl-quota.timer
 journalctl -u vpnctl-quota.service -n 100 --no-pager
 ```
 
-## Legacy Script Compatibility
-
-The previous script names are still available as wrappers:
-
-```bash
-python3 setup_vpn_server.py \
-  --server-host YOUR_SERVER_IP_OR_DOMAIN \
-  --default-domain vpn.local \
-  --dest www.cloudflare.com:443 \
-  --client-names phone laptop
-```
-
-```bash
-python3 change_vpn_server.py --add-client tablet
-python3 change_vpn_server.py --get-link phone --qr
-```
-
-Prefer `vpnctl.py` for new usage.
-
 ## Troubleshooting
 
 If the container does not start, validate the generated config:
@@ -206,7 +187,7 @@ python3 vpnctl.py logs
 
 If clients cannot connect:
 
-- confirm the VPS firewall and cloud firewall allow TCP `443`
+- confirm the VPS firewall and cloud firewall allow the configured TCP port, default `443`
 - confirm `--server-host` is the public IP or DNS name clients use
 - confirm `--reality-target` is reachable from the server
 - regenerate the client link with `python3 vpnctl.py link CLIENT_NAME`

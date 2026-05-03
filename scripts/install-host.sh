@@ -94,3 +94,5 @@ if [ "${INSTALL_USER}" != "root" ]; then
   echo "Run 'newgrp docker' or log out and back in before running vpnctl without sudo."
 fi
 echo "Initialize the VPN with: ${PYTHON_BIN} ${REPO_DIR}/vpnctl.py init --server-host YOUR_IP_OR_DOMAIN --reality-target www.cloudflare.com:443 --client phone"
+echo "Use '--port 8443' or another TCP port during init if you do not want to use 443."
+echo "For non-443 ports, open that TCP port in ufw and in your cloud firewall."
