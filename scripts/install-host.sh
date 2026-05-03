@@ -6,6 +6,7 @@ PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 SERVICE_NAME="vpnctl-quota"
 DOCKER_APT_KEYRING="/etc/apt/keyrings/docker.asc"
 DOCKER_APT_SOURCE="/etc/apt/sources.list.d/docker.list"
+INSTALL_USER="${SUDO_USER:-$USER}"
 
 if ! command -v apt-get >/dev/null 2>&1; then
   echo "This installer supports Ubuntu/Debian hosts with apt-get." >&2
@@ -20,7 +21,7 @@ fi
 sudo apt-get update
 sudo apt-get install -y ca-certificates curl gnupg python3 python3-cryptography python3-qrcode
 
-if ! docker compose version >/dev/null 2>&1; then
+if ! sudo docker compose version >/dev/null 2>&1; then
   . /etc/os-release
   DOCKER_APT_CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
   if [ -z "${DOCKER_APT_CODENAME}" ]; then
@@ -43,12 +44,16 @@ if ! docker compose version >/dev/null 2>&1; then
   fi
 fi
 
-if ! docker compose version >/dev/null 2>&1; then
+if ! sudo docker compose version >/dev/null 2>&1; then
   echo "docker compose is still unavailable after installation." >&2
   exit 1
 fi
 
 sudo systemctl enable --now docker
+sudo groupadd -f docker
+if [ "${INSTALL_USER}" != "root" ]; then
+  sudo usermod -aG docker "${INSTALL_USER}"
+fi
 
 if command -v ufw >/dev/null 2>&1 && sudo ufw status | grep -q "Status: active"; then
   sudo ufw allow 443/tcp
@@ -84,4 +89,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now "${SERVICE_NAME}.timer"
 
 echo "Host setup complete."
+if [ "${INSTALL_USER}" != "root" ]; then
+  echo "User '${INSTALL_USER}' was added to the docker group."
+  echo "Run 'newgrp docker' or log out and back in before running vpnctl without sudo."
+fi
 echo "Initialize the VPN with: ${PYTHON_BIN} ${REPO_DIR}/vpnctl.py init --server-host YOUR_IP_OR_DOMAIN --reality-target www.cloudflare.com:443 --client phone"

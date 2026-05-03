@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -184,6 +185,19 @@ class VpnctlTests(unittest.TestCase):
         )
 
         self.assertEqual(state["usage_period"], "2026-05")
+
+    def test_docker_socket_permission_error_is_detected(self) -> None:
+        error = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["docker", "compose", "up", "-d"],
+            stderr=(
+                "unable to get image 'ghcr.io/xtls/xray-core:latest': permission denied "
+                "while trying to connect to the docker API at unix:///var/run/docker.sock"
+            ),
+        )
+
+        self.assertIs(vpnctl.is_docker_permission_error(error), True)
+        self.assertIn("/var/run/docker.sock", str(vpnctl.docker_permission_error()))
 
     def test_init_command_writes_state_and_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

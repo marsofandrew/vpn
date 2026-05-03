@@ -437,14 +437,42 @@ def compose_base_command(compose_file: Path) -> list[str]:
     raise VpnctlError("docker compose is not installed")
 
 
+def is_docker_permission_error(error: subprocess.CalledProcessError) -> bool:
+    text = " ".join(
+        part.lower()
+        for part in (str(error), error.stderr or "", error.stdout or "")
+        if part
+    )
+    return (
+        "/var/run/docker.sock" in text
+        and "permission denied" in text
+    ) or (
+        "docker api" in text
+        and "permission denied" in text
+    )
+
+
+def docker_permission_error() -> VpnctlError:
+    return VpnctlError(
+        "Docker is installed, but this user cannot access /var/run/docker.sock. "
+        "Run 'sudo usermod -aG docker $USER', then log out and back in or run 'newgrp docker'. "
+        "Temporary workaround: run this command with sudo."
+    )
+
+
 def run_compose(compose_file: Path, args: list[str], capture: bool = False) -> subprocess.CompletedProcess[str]:
     command = compose_base_command(compose_file) + args
-    return subprocess.run(
-        command,
-        check=True,
-        text=True,
-        capture_output=capture,
-    )
+    try:
+        return subprocess.run(
+            command,
+            check=True,
+            text=True,
+            capture_output=capture,
+        )
+    except subprocess.CalledProcessError as error:
+        if is_docker_permission_error(error):
+            raise docker_permission_error() from error
+        raise
 
 
 def restart_xray(compose_file: Path) -> None:

@@ -223,6 +223,17 @@ If `apt` reports `Unable to locate package docker-compose-plugin`:
 - the installer now adds Docker's official apt repository before installing `docker-compose-plugin`
 - if apt reports Docker package conflicts, remove the conflicting distro Docker packages manually and rerun the installer
 
+If Docker reports permission denied for `/var/run/docker.sock`:
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+docker compose version
+python3 vpnctl.py up
+```
+
+On some VPS sessions, `newgrp docker` is not enough. Log out of SSH and log back in, then run `python3 vpnctl.py up` again.
+
 ## Tests
 
 Run the standard-library test suite:
