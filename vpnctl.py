@@ -17,10 +17,11 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
 
-STATE_VERSION = 1
+STATE_VERSION = 2
 DEFAULT_STATE_PATH = Path("data/vpn_state.json")
 DEFAULT_CONFIG_PATH = Path("data/config.json")
 DEFAULT_COMPOSE_FILE = Path("docker-compose.yaml")
+DEFAULT_PROFILE_NAME = "default"
 DEFAULT_PORT = 443
 DEFAULT_API_PORT = 10085
 DEFAULT_FINGERPRINT = "chrome"
@@ -141,12 +142,23 @@ def safe_client_email(name: str, default_domain: str) -> str:
     return f"{local}@{default_domain}"
 
 
-def create_client(name: str, default_domain: str, quota_bytes: int | None = None) -> dict[str, Any]:
+def client_email(name: str, default_domain: str, profile_name: str = DEFAULT_PROFILE_NAME) -> str:
+    if profile_name == DEFAULT_PROFILE_NAME:
+        return safe_client_email(name, default_domain)
+    return safe_client_email(f"{profile_name}-{name}", default_domain)
+
+
+def create_client(
+    name: str,
+    default_domain: str,
+    quota_bytes: int | None = None,
+    profile_name: str = DEFAULT_PROFILE_NAME,
+) -> dict[str, Any]:
     now = utc_now()
     return {
         "name": name,
         "id": str(uuid.uuid4()),
-        "email": safe_client_email(name, default_domain),
+        "email": client_email(name, default_domain, profile_name),
         "enabled": True,
         "quota_bytes": quota_bytes,
         "used_uplink_bytes": 0,
@@ -157,8 +169,17 @@ def create_client(name: str, default_domain: str, quota_bytes: int | None = None
     }
 
 
-def create_state(
-    server_host: str,
+def validate_profile_name(name: str) -> str:
+    normalized = name.strip()
+    if not normalized:
+        raise VpnctlError("profile name cannot be empty")
+    if any(char.isspace() for char in normalized):
+        raise VpnctlError("profile name cannot contain whitespace")
+    return normalized
+
+
+def create_profile(
+    name: str,
     reality_target: str,
     default_domain: str,
     port: int,
@@ -167,23 +188,44 @@ def create_state(
 ) -> dict[str, Any]:
     keys = generate_reality_keys()
     now = utc_now()
+    profile_name = validate_profile_name(name)
+    return {
+        "name": profile_name,
+        "created_at": now,
+        "updated_at": now,
+        "port": parse_port(port),
+        "reality_target": reality_target,
+        "short_id": os.urandom(8).hex(),
+        "keys": keys,
+        "clients": [
+            create_client(client_name, default_domain, quota_bytes, profile_name)
+            for client_name in deduplicate_names(client_names)
+        ],
+    }
+
+
+def create_state(
+    server_host: str,
+    reality_target: str,
+    default_domain: str,
+    port: int,
+    client_names: list[str],
+    quota_bytes: int | None,
+    profile_name: str = DEFAULT_PROFILE_NAME,
+) -> dict[str, Any]:
+    now = utc_now()
     return {
         "version": STATE_VERSION,
         "created_at": now,
         "updated_at": now,
         "usage_period": current_usage_period(),
         "server_host": server_host,
-        "port": parse_port(port),
         "default_domain": default_domain,
-        "reality_target": reality_target,
-        "short_id": os.urandom(8).hex(),
-        "keys": keys,
         "fingerprint": DEFAULT_FINGERPRINT,
         "flow": DEFAULT_FLOW,
         "spider_x": DEFAULT_SPIDER_X,
-        "clients": [
-            create_client(name, default_domain, quota_bytes)
-            for name in deduplicate_names(client_names)
+        "profiles": [
+            create_profile(profile_name, reality_target, default_domain, port, client_names, quota_bytes)
         ],
     }
 
@@ -202,9 +244,84 @@ def deduplicate_names(names: list[str]) -> list[str]:
     return result
 
 
+def all_profiles(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return state.setdefault("profiles", [])
+
+
+def profile_label(profile: dict[str, Any]) -> str:
+    return profile.get("name", DEFAULT_PROFILE_NAME)
+
+
+def require_profile(state: dict[str, Any], name: str | None = None) -> dict[str, Any]:
+    profiles = all_profiles(state)
+    target = name or DEFAULT_PROFILE_NAME
+    for profile in profiles:
+        if profile_label(profile) == target:
+            return profile
+    raise VpnctlError(f"profile not found: {target}")
+
+
+def find_profile(state: dict[str, Any], name: str) -> dict[str, Any] | None:
+    for profile in all_profiles(state):
+        if profile_label(profile) == name:
+            return profile
+    return None
+
+
+def clients_in_state(state: dict[str, Any]) -> list[dict[str, Any]]:
+    clients: list[dict[str, Any]] = []
+    for profile in all_profiles(state):
+        clients.extend(profile.get("clients", []))
+    return clients
+
+
+def profile_tag(profile: dict[str, Any]) -> str:
+    name = profile_label(profile)
+    safe_name = "".join(char if char.isalnum() or char in "._-" else "_" for char in name)
+    return f"vless_reality_{safe_name or DEFAULT_PROFILE_NAME}"
+
+
+def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> None:
+    profiles = all_profiles(state)
+    if not profiles:
+        raise VpnctlError("at least one profile is required")
+
+    names: set[str] = set()
+    ports: dict[int, str] = {}
+    emails: dict[str, str] = {}
+    ids: dict[str, str] = {}
+    for profile in profiles:
+        name = validate_profile_name(profile_label(profile))
+        if name in names:
+            raise VpnctlError(f"duplicate profile name: {name}")
+        names.add(name)
+        port = parse_port(profile.get("port", DEFAULT_PORT))
+        if port == api_port:
+            raise VpnctlError(f"profile {name} uses reserved API port {api_port}")
+        if port in ports:
+            raise VpnctlError(f"profile {name} uses duplicate port {port} already used by {ports[port]}")
+        ports[port] = name
+
+        client_names: set[str] = set()
+        for client in profile.get("clients", []):
+            client_name = client.get("name", "")
+            client_id = client.get("id", "")
+            email = client.get("email", "")
+            if client_name in client_names:
+                raise VpnctlError(f"duplicate client name in profile {name}: {client_name}")
+            client_names.add(client_name)
+            if client_id in ids:
+                raise VpnctlError(f"duplicate client id {client_id} in profiles {ids[client_id]} and {name}")
+            if email in emails:
+                raise VpnctlError(f"duplicate client email {email} in profiles {emails[email]} and {name}")
+            ids[client_id] = name
+            emails[email] = name
+
+
 def migrate_legacy_state(raw: dict[str, Any]) -> dict[str, Any]:
     if raw.get("version") == STATE_VERSION:
         raw.setdefault("usage_period", current_usage_period())
+        validate_state(raw)
         return raw
 
     if {"keys", "short_id", "clients", "default_domain"}.issubset(raw.keys()):
@@ -218,31 +335,40 @@ def migrate_legacy_state(raw: dict[str, Any]) -> dict[str, Any]:
                     "name": name,
                     "id": client["id"],
                     "email": client.get("email") or safe_client_email(name, default_domain),
-                    "enabled": True,
-                    "quota_bytes": None,
-                    "used_uplink_bytes": 0,
-                    "used_downlink_bytes": 0,
-                    "created_at": now,
-                    "updated_at": now,
-                    "disabled_reason": None,
+                    "enabled": client.get("enabled", True),
+                    "quota_bytes": client.get("quota_bytes"),
+                    "used_uplink_bytes": int(client.get("used_uplink_bytes", 0)),
+                    "used_downlink_bytes": int(client.get("used_downlink_bytes", 0)),
+                    "created_at": client.get("created_at", now),
+                    "updated_at": client.get("updated_at", now),
+                    "disabled_reason": client.get("disabled_reason"),
                 }
             )
-        return {
+        migrated = {
             "version": STATE_VERSION,
-            "created_at": now,
+            "created_at": raw.get("created_at", now),
             "updated_at": now,
-            "usage_period": current_usage_period(),
+            "usage_period": raw.get("usage_period", current_usage_period()),
             "server_host": raw.get("server_host", "127.0.0.1"),
-            "port": int(raw.get("port", DEFAULT_PORT)),
             "default_domain": default_domain,
-            "reality_target": raw.get("reality_target") or raw.get("dest", "www.cloudflare.com:443"),
-            "short_id": raw["short_id"],
-            "keys": raw["keys"],
             "fingerprint": raw.get("fingerprint", DEFAULT_FINGERPRINT),
             "flow": raw.get("flow", DEFAULT_FLOW),
             "spider_x": raw.get("spider_x", DEFAULT_SPIDER_X),
-            "clients": migrated_clients,
+            "profiles": [
+                {
+                    "name": DEFAULT_PROFILE_NAME,
+                    "created_at": raw.get("created_at", now),
+                    "updated_at": raw.get("updated_at", now),
+                    "port": int(raw.get("port", DEFAULT_PORT)),
+                    "reality_target": raw.get("reality_target") or raw.get("dest", "www.cloudflare.com:443"),
+                    "short_id": raw["short_id"],
+                    "keys": raw["keys"],
+                    "clients": migrated_clients,
+                }
+            ],
         }
+        validate_state(migrated)
+        return migrated
 
     raise VpnctlError("state file is not a recognized vpnctl state format")
 
@@ -269,23 +395,61 @@ def load_state(path: Path) -> dict[str, Any]:
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
+    validate_state(state)
     state["updated_at"] = utc_now()
     write_json(path, state)
 
 
+def render_vless_inbound(state: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    reality_host, _ = split_host_port(profile["reality_target"])
+    enabled_clients = []
+    for client in profile.get("clients", []):
+        if client.get("enabled", True):
+            enabled_clients.append(
+                {
+                    "id": client["id"],
+                    "email": client["email"],
+                    "flow": state.get("flow", DEFAULT_FLOW),
+                    "level": 0,
+                }
+            )
+
+    return {
+        "tag": profile_tag(profile),
+        "listen": "0.0.0.0",
+        "port": parse_port(profile.get("port", DEFAULT_PORT)),
+        "protocol": "vless",
+        "settings": {
+            "clients": enabled_clients,
+            "decryption": "none",
+        },
+        "streamSettings": {
+            "network": "tcp",
+            "security": "reality",
+            "realitySettings": {
+                "show": False,
+                "target": profile["reality_target"],
+                "xver": 0,
+                "serverNames": [reality_host],
+                "privateKey": profile["keys"]["private_key"],
+                "shortIds": [profile["short_id"]],
+            },
+        },
+    }
+
+
 def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> dict[str, Any]:
-    reality_host, _ = split_host_port(state["reality_target"])
-    vpn_port = parse_port(state.get("port", DEFAULT_PORT))
-    enabled_clients = [
+    validate_state(state, api_port)
+    inbounds = [render_vless_inbound(state, profile) for profile in all_profiles(state)]
+    inbounds.append(
         {
-            "id": client["id"],
-            "email": client["email"],
-            "flow": state.get("flow", DEFAULT_FLOW),
-            "level": 0,
+            "tag": "api",
+            "listen": "127.0.0.1",
+            "port": api_port,
+            "protocol": "dokodemo-door",
+            "settings": {"address": "127.0.0.1"},
         }
-        for client in state["clients"]
-        if client.get("enabled", True)
-    ]
+    )
 
     return {
         "log": {
@@ -311,37 +475,7 @@ def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> di
                 "statsOutboundDownlink": True,
             },
         },
-        "inbounds": [
-            {
-                "tag": "vless_reality",
-                "listen": "0.0.0.0",
-                "port": vpn_port,
-                "protocol": "vless",
-                "settings": {
-                    "clients": enabled_clients,
-                    "decryption": "none",
-                },
-                "streamSettings": {
-                    "network": "tcp",
-                    "security": "reality",
-                    "realitySettings": {
-                        "show": False,
-                        "target": state["reality_target"],
-                        "xver": 0,
-                        "serverNames": [reality_host],
-                        "privateKey": state["keys"]["private_key"],
-                        "shortIds": [state["short_id"]],
-                    },
-                },
-            },
-            {
-                "tag": "api",
-                "listen": "127.0.0.1",
-                "port": api_port,
-                "protocol": "dokodemo-door",
-                "settings": {"address": "127.0.0.1"},
-            },
-        ],
+        "inbounds": inbounds,
         "outbounds": [
             {
                 "tag": "direct",
@@ -377,7 +511,7 @@ def ensure_monthly_period(state: dict[str, Any]) -> bool:
 
     now = utc_now()
     state["usage_period"] = period
-    for client in state["clients"]:
+    for client in clients_in_state(state):
         client["used_uplink_bytes"] = 0
         client["used_downlink_bytes"] = 0
         if client.get("disabled_reason") == "quota_exceeded":
@@ -400,36 +534,53 @@ def persist_state_and_config(
         restart_xray(compose_file, state)
 
 
-def find_client(state: dict[str, Any], name_or_id: str) -> dict[str, Any] | None:
-    for client in state["clients"]:
-        if client["name"] == name_or_id or client["id"] == name_or_id:
-            return client
-    return None
+def find_client(
+    state: dict[str, Any],
+    name_or_id: str,
+    profile_name: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    profiles = [require_profile(state, profile_name)] if profile_name else all_profiles(state)
+    for profile in profiles:
+        for client in profile.get("clients", []):
+            if client["name"] == name_or_id or client["id"] == name_or_id:
+                matches.append((profile, client))
+    if not matches:
+        return None
+    if len(matches) > 1:
+        profiles_text = ", ".join(profile_label(profile) for profile, _ in matches)
+        raise VpnctlError(f"client name is ambiguous across profiles ({profiles_text}); pass --profile")
+    return matches[0]
 
 
-def require_client(state: dict[str, Any], name_or_id: str) -> dict[str, Any]:
-    client = find_client(state, name_or_id)
-    if client is None:
-        raise VpnctlError(f"client not found: {name_or_id}")
-    return client
+def require_client(
+    state: dict[str, Any],
+    name_or_id: str,
+    profile_name: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    match = find_client(state, name_or_id, profile_name)
+    if match is None:
+        suffix = f" in profile {profile_name}" if profile_name else ""
+        raise VpnctlError(f"client not found{suffix}: {name_or_id}")
+    return match
 
 
-def generate_vless_link(client: dict[str, Any], state: dict[str, Any]) -> str:
-    reality_host, _ = split_host_port(state["reality_target"])
+def generate_vless_link(client: dict[str, Any], state: dict[str, Any], profile: dict[str, Any]) -> str:
+    reality_host, _ = split_host_port(profile["reality_target"])
     params = {
         "type": "tcp",
         "encryption": "none",
         "security": "reality",
-        "pbk": state["keys"]["public_key"],
+        "pbk": profile["keys"]["public_key"],
         "fp": state.get("fingerprint", DEFAULT_FINGERPRINT),
         "sni": reality_host,
-        "sid": state["short_id"],
+        "sid": profile["short_id"],
         "spx": state.get("spider_x", DEFAULT_SPIDER_X),
         "flow": state.get("flow", DEFAULT_FLOW),
     }
     query = urlencode(params)
-    label = quote(client["name"])
-    return f"vless://{client['id']}@{state['server_host']}:{state['port']}?{query}#{label}"
+    label = quote(f"{profile_label(profile)}:{client['name']}")
+    return f"vless://{client['id']}@{state['server_host']}:{profile['port']}?{query}#{label}"
 
 
 def write_qr(link: str, client_name: str, output_dir: Path) -> Path:
@@ -446,14 +597,6 @@ def compose_base_command(compose_file: Path) -> list[str]:
     if shutil.which("docker-compose"):
         return ["docker-compose", "-f", str(compose_file)]
     raise VpnctlError("docker compose is not installed")
-
-
-def compose_environment(port: int | None = None) -> dict[str, str] | None:
-    if port is None:
-        return None
-    environment = os.environ.copy()
-    environment["XRAY_PORT"] = str(parse_port(port))
-    return environment
 
 
 def is_docker_permission_error(error: subprocess.CalledProcessError) -> bool:
@@ -483,7 +626,6 @@ def run_compose(
     compose_file: Path,
     args: list[str],
     capture: bool = False,
-    port: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = compose_base_command(compose_file) + args
     try:
@@ -492,7 +634,6 @@ def run_compose(
             check=True,
             text=True,
             capture_output=capture,
-            env=compose_environment(port),
         )
     except subprocess.CalledProcessError as error:
         if is_docker_permission_error(error):
@@ -501,8 +642,7 @@ def run_compose(
 
 
 def restart_xray(compose_file: Path, state: dict[str, Any] | None = None) -> None:
-    port = state.get("port", DEFAULT_PORT) if state else None
-    run_compose(compose_file, ["up", "-d", XRAY_SERVICE], port=port)
+    run_compose(compose_file, ["up", "-d", XRAY_SERVICE])
 
 
 def query_xray_stats(compose_file: Path, reset: bool, state: dict[str, Any]) -> dict[str, Any]:
@@ -519,7 +659,7 @@ def query_xray_stats(compose_file: Path, reset: bool, state: dict[str, Any]) -> 
     ]
     if reset:
         args.append("-reset")
-    completed = run_compose(compose_file, args, capture=True, port=state.get("port", DEFAULT_PORT))
+    completed = run_compose(compose_file, args, capture=True)
     output = completed.stdout.strip()
     if not output:
         return {"stat": []}
@@ -552,7 +692,7 @@ def collect_usage_deltas(stats_response: dict[str, Any]) -> dict[str, dict[str, 
 
 def apply_usage_deltas(state: dict[str, Any], deltas: dict[str, dict[str, int]]) -> bool:
     changed = False
-    clients_by_email = {client["email"]: client for client in state["clients"]}
+    clients_by_email = {client["email"]: client for client in clients_in_state(state)}
     for email, traffic in deltas.items():
         client = clients_by_email.get(email)
         if client is None:
@@ -570,7 +710,7 @@ def apply_usage_deltas(state: dict[str, Any], deltas: dict[str, dict[str, int]])
 def enforce_quotas(state: dict[str, Any]) -> list[dict[str, Any]]:
     disabled: list[dict[str, Any]] = []
     now = utc_now()
-    for client in state["clients"]:
+    for client in clients_in_state(state):
         quota = client.get("quota_bytes")
         used = int(client.get("used_uplink_bytes", 0)) + int(client.get("used_downlink_bytes", 0))
         if client.get("enabled", True) and quota is not None and used >= int(quota):
@@ -579,6 +719,52 @@ def enforce_quotas(state: dict[str, Any]) -> list[dict[str, Any]]:
             client["updated_at"] = now
             disabled.append(client)
     return disabled
+
+
+def command_profile_list(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    if ensure_monthly_period(state):
+        persist_state_and_config(state, args.state, args.config)
+    for profile in all_profiles(state):
+        clients = profile.get("clients", [])
+        enabled_count = sum(1 for client in clients if client.get("enabled", True))
+        print(
+            f"{profile_label(profile)}\tport={profile['port']}\treality_target={profile['reality_target']}"
+            f"\tclients={enabled_count}/{len(clients)}"
+        )
+
+
+def command_profile_add(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    ensure_monthly_period(state)
+    profile_name = validate_profile_name(args.name)
+    if find_profile(state, profile_name):
+        raise VpnctlError(f"profile already exists: {profile_name}")
+    quota_bytes = parse_size(args.quota)
+    profile = create_profile(
+        profile_name,
+        args.reality_target,
+        state["default_domain"],
+        args.port,
+        args.client or [],
+        quota_bytes,
+    )
+    state["profiles"].append(profile)
+    persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
+    print(f"Profile added: {profile_label(profile)} on port {profile['port']}")
+    for client in profile["clients"]:
+        print(f"Client {profile_label(profile)}/{client['name']}: {generate_vless_link(client, state, profile)}")
+
+
+def command_profile_remove(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    ensure_monthly_period(state)
+    profile = require_profile(state, args.name)
+    if len(all_profiles(state)) == 1:
+        raise VpnctlError("cannot remove the last profile")
+    state["profiles"] = [item for item in all_profiles(state) if profile_label(item) != profile_label(profile)]
+    persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
+    print(f"Profile removed: {profile_label(profile)}")
 
 
 def command_init(args: argparse.Namespace) -> None:
@@ -593,13 +779,15 @@ def command_init(args: argparse.Namespace) -> None:
         port=args.port,
         client_names=args.client,
         quota_bytes=quota_bytes,
+        profile_name=args.profile,
     )
     save_state(args.state, state)
     render_and_save_config(state, args.config)
     print(f"State saved to {args.state}")
     print(f"Xray config rendered to {args.config}")
-    for client in state["clients"]:
-        print(f"Client {client['name']}: {generate_vless_link(client, state)}")
+    profile = require_profile(state, args.profile)
+    for client in profile["clients"]:
+        print(f"Client {profile_label(profile)}/{client['name']}: {generate_vless_link(client, state, profile)}")
 
 
 def command_render(args: argparse.Namespace) -> None:
@@ -612,36 +800,42 @@ def command_render(args: argparse.Namespace) -> None:
 def command_client_add(args: argparse.Namespace) -> None:
     state = load_state(args.state)
     ensure_monthly_period(state)
-    if find_client(state, args.name):
-        raise VpnctlError(f"client already exists: {args.name}")
-    client = create_client(args.name, state["default_domain"], parse_size(args.quota))
-    state["clients"].append(client)
+    profile = require_profile(state, args.profile)
+    if find_client(state, args.name, profile_label(profile)):
+        raise VpnctlError(f"client already exists in profile {profile_label(profile)}: {args.name}")
+    client = create_client(args.name, state["default_domain"], parse_size(args.quota), profile_label(profile))
+    profile["clients"].append(client)
+    profile["updated_at"] = utc_now()
     persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
-    print(f"Client added: {client['name']}")
-    print(generate_vless_link(client, state))
+    print(f"Client added: {profile_label(profile)}/{client['name']}")
+    print(generate_vless_link(client, state, profile))
 
 
 def command_client_remove(args: argparse.Namespace) -> None:
     state = load_state(args.state)
     ensure_monthly_period(state)
-    client = require_client(state, args.name_or_id)
-    state["clients"] = [item for item in state["clients"] if item["id"] != client["id"]]
+    profile, client = require_client(state, args.name_or_id, args.profile)
+    profile["clients"] = [item for item in profile["clients"] if item["id"] != client["id"]]
+    profile["updated_at"] = utc_now()
     persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
-    print(f"Client removed: {client['name']}")
+    print(f"Client removed: {profile_label(profile)}/{client['name']}")
 
 
 def command_client_list(args: argparse.Namespace) -> None:
     state = load_state(args.state)
     if ensure_monthly_period(state):
         persist_state_and_config(state, args.state, args.config)
-    if not state["clients"]:
+    profiles = [require_profile(state, args.profile)] if args.profile else all_profiles(state)
+    clients = [(profile, client) for profile in profiles for client in profile.get("clients", [])]
+    if not clients:
         print("No clients configured.")
         return
-    for client in state["clients"]:
+    for profile, client in clients:
         used = int(client.get("used_uplink_bytes", 0)) + int(client.get("used_downlink_bytes", 0))
         status = "enabled" if client.get("enabled", True) else f"disabled:{client.get('disabled_reason')}"
         print(
-            f"{client['name']}\t{status}\tperiod={state['usage_period']}\tmonthly_quota={format_size(client.get('quota_bytes'))}"
+            f"{profile_label(profile)}/{client['name']}\t{status}\tport={profile['port']}\tperiod={state['usage_period']}"
+            f"\tmonthly_quota={format_size(client.get('quota_bytes'))}"
             f"\tused={format_size(used)}\tid={client['id']}"
         )
 
@@ -649,28 +843,29 @@ def command_client_list(args: argparse.Namespace) -> None:
 def command_client_enabled(args: argparse.Namespace, enabled: bool) -> None:
     state = load_state(args.state)
     ensure_monthly_period(state)
-    client = require_client(state, args.name_or_id)
+    profile, client = require_client(state, args.name_or_id, args.profile)
     client["enabled"] = enabled
     client["disabled_reason"] = None if enabled else args.reason
     client["updated_at"] = utc_now()
+    profile["updated_at"] = utc_now()
     persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
-    print(f"Client {'enabled' if enabled else 'disabled'}: {client['name']}")
+    print(f"Client {'enabled' if enabled else 'disabled'}: {profile_label(profile)}/{client['name']}")
 
 
 def command_quota_set(args: argparse.Namespace) -> None:
     state = load_state(args.state)
     ensure_monthly_period(state)
-    client = require_client(state, args.name_or_id)
+    profile, client = require_client(state, args.name_or_id, args.profile)
     client["quota_bytes"] = parse_size(args.quota)
     client["updated_at"] = utc_now()
     persist_state_and_config(state, args.state, args.config)
-    print(f"Monthly quota for {client['name']} set to {format_size(client['quota_bytes'])}")
+    print(f"Monthly quota for {profile_label(profile)}/{client['name']} set to {format_size(client['quota_bytes'])}")
 
 
 def command_quota_reset(args: argparse.Namespace) -> None:
     state = load_state(args.state)
     ensure_monthly_period(state)
-    client = require_client(state, args.name_or_id)
+    profile, client = require_client(state, args.name_or_id, args.profile)
     client["used_uplink_bytes"] = 0
     client["used_downlink_bytes"] = 0
     if args.enable:
@@ -678,7 +873,7 @@ def command_quota_reset(args: argparse.Namespace) -> None:
         client["disabled_reason"] = None
     client["updated_at"] = utc_now()
     persist_state_and_config(state, args.state, args.config, args.compose_file, restart=args.enable and not args.no_restart)
-    print(f"Monthly usage reset for {client['name']} in period {state['usage_period']}")
+    print(f"Monthly usage reset for {profile_label(profile)}/{client['name']} in period {state['usage_period']}")
 
 
 def command_quota_enforce(args: argparse.Namespace) -> None:
@@ -695,9 +890,15 @@ def command_quota_enforce(args: argparse.Namespace) -> None:
             args.compose_file,
             restart=(period_changed or bool(disabled)) and not args.no_restart,
         )
+    profile_by_client_id = {
+        client["id"]: profile
+        for profile in all_profiles(state)
+        for client in profile.get("clients", [])
+    }
     for client in disabled:
         used = int(client.get("used_uplink_bytes", 0)) + int(client.get("used_downlink_bytes", 0))
-        print(f"Disabled {client['name']} after {format_size(used)} used")
+        profile = profile_by_client_id[client["id"]]
+        print(f"Disabled {profile_label(profile)}/{client['name']} after {format_size(used)} used")
     if period_changed:
         print(f"Monthly quota period rolled over to {state['usage_period']}. Xray counters were reset.")
     if not disabled:
@@ -714,33 +915,32 @@ def command_usage(args: argparse.Namespace) -> None:
     if period_changed:
         save_state(args.state, state)
         render_and_save_config(state, args.config)
-    for client in state["clients"]:
-        uplink = int(client.get("used_uplink_bytes", 0))
-        downlink = int(client.get("used_downlink_bytes", 0))
-        print(
-            f"{client['name']}\tuplink={format_size(uplink)}\tdownlink={format_size(downlink)}"
-            f"\ttotal={format_size(uplink + downlink)}\tperiod={state['usage_period']}"
-            f"\tmonthly_quota={format_size(client.get('quota_bytes'))}"
-        )
+    profiles = [require_profile(state, args.profile)] if args.profile else all_profiles(state)
+    for profile in profiles:
+        for client in profile.get("clients", []):
+            uplink = int(client.get("used_uplink_bytes", 0))
+            downlink = int(client.get("used_downlink_bytes", 0))
+            print(
+                f"{profile_label(profile)}/{client['name']}\tuplink={format_size(uplink)}\tdownlink={format_size(downlink)}"
+                f"\ttotal={format_size(uplink + downlink)}\tperiod={state['usage_period']}"
+                f"\tmonthly_quota={format_size(client.get('quota_bytes'))}"
+            )
 
 
 def command_link(args: argparse.Namespace) -> None:
     state = load_state(args.state)
     if ensure_monthly_period(state):
         persist_state_and_config(state, args.state, args.config)
-    client = require_client(state, args.name_or_id)
-    link = generate_vless_link(client, state)
+    profile, client = require_client(state, args.name_or_id, args.profile)
+    link = generate_vless_link(client, state, profile)
     print(link)
     if args.qr:
-        path = write_qr(link, client["name"], args.output)
+        path = write_qr(link, f"{profile_label(profile)}-{client['name']}", args.output)
         print(f"QR code saved to {path}")
 
 
 def command_compose(args: argparse.Namespace, compose_args: list[str]) -> None:
-    port = None
-    if args.state.exists():
-        port = load_state(args.state).get("port", DEFAULT_PORT)
-    run_compose(args.compose_file, compose_args, port=port)
+    run_compose(args.compose_file, compose_args)
 
 
 def add_common_paths(parser: argparse.ArgumentParser) -> None:
@@ -764,6 +964,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--reality-target", required=True, help="REALITY target, for example www.cloudflare.com:443.")
     init_parser.add_argument("--default-domain", help="Domain used in generated client emails. Defaults to server host.")
     init_parser.add_argument("--port", type=parse_port, default=DEFAULT_PORT, help="Public VLESS port.")
+    init_parser.add_argument("--profile", default=DEFAULT_PROFILE_NAME, help="Initial VPN profile name.")
     init_parser.add_argument("--client", action="append", required=True, help="Initial client name. Repeatable.")
     init_parser.add_argument("--quota", help="Optional initial monthly quota for all created clients, for example 50GiB.")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing state.")
@@ -772,29 +973,53 @@ def build_parser() -> argparse.ArgumentParser:
     render_parser = subparsers.add_parser("render", help="Render config from state.")
     render_parser.set_defaults(func=command_render)
 
+    profile_parser = subparsers.add_parser("profile", help="Manage VPN profiles.")
+    profile_subparsers = profile_parser.add_subparsers(dest="profile_command", required=True)
+    profile_list_parser = profile_subparsers.add_parser("list", help="List VPN profiles.")
+    profile_list_parser.set_defaults(func=command_profile_list)
+
+    profile_add_parser = profile_subparsers.add_parser("add", help="Add a VPN profile on another port.")
+    profile_add_parser.add_argument("name")
+    profile_add_parser.add_argument("--port", type=parse_port, required=True, help="Public VLESS port for this profile.")
+    profile_add_parser.add_argument("--reality-target", required=True, help="REALITY target, for example www.cloudflare.com:443.")
+    profile_add_parser.add_argument("--client", action="append", help="Initial client name. Repeatable.")
+    profile_add_parser.add_argument("--quota", help="Optional initial monthly quota for created clients, for example 50GiB.")
+    profile_add_parser.add_argument("--no-restart", action="store_true")
+    profile_add_parser.set_defaults(func=command_profile_add)
+
+    profile_remove_parser = profile_subparsers.add_parser("remove", help="Remove a VPN profile and its clients.")
+    profile_remove_parser.add_argument("name")
+    profile_remove_parser.add_argument("--no-restart", action="store_true")
+    profile_remove_parser.set_defaults(func=command_profile_remove)
+
     client_parser = subparsers.add_parser("client", help="Manage clients.")
     client_subparsers = client_parser.add_subparsers(dest="client_command", required=True)
     add_parser = client_subparsers.add_parser("add", help="Add a client.")
     add_parser.add_argument("name")
+    add_parser.add_argument("--profile", default=DEFAULT_PROFILE_NAME, help="VPN profile to add the client to.")
     add_parser.add_argument("--quota", help="Optional monthly quota, for example 50GiB.")
     add_parser.add_argument("--no-restart", action="store_true")
     add_parser.set_defaults(func=command_client_add)
 
     remove_parser = client_subparsers.add_parser("remove", help="Remove a client.")
     remove_parser.add_argument("name_or_id")
+    remove_parser.add_argument("--profile", help="VPN profile to remove the client from.")
     remove_parser.add_argument("--no-restart", action="store_true")
     remove_parser.set_defaults(func=command_client_remove)
 
     list_parser = client_subparsers.add_parser("list", help="List clients.")
+    list_parser.add_argument("--profile", help="Only list clients in this VPN profile.")
     list_parser.set_defaults(func=command_client_list)
 
     enable_parser = client_subparsers.add_parser("enable", help="Enable a client.")
     enable_parser.add_argument("name_or_id")
+    enable_parser.add_argument("--profile", help="VPN profile containing the client.")
     enable_parser.add_argument("--no-restart", action="store_true")
     enable_parser.set_defaults(func=lambda args: command_client_enabled(args, True))
 
     disable_parser = client_subparsers.add_parser("disable", help="Disable a client.")
     disable_parser.add_argument("name_or_id")
+    disable_parser.add_argument("--profile", help="VPN profile containing the client.")
     disable_parser.add_argument("--reason", default="manual")
     disable_parser.add_argument("--no-restart", action="store_true")
     disable_parser.set_defaults(func=lambda args: command_client_enabled(args, False))
@@ -803,11 +1028,13 @@ def build_parser() -> argparse.ArgumentParser:
     quota_subparsers = quota_parser.add_subparsers(dest="quota_command", required=True)
     quota_set_parser = quota_subparsers.add_parser("set", help="Set a client monthly quota.")
     quota_set_parser.add_argument("name_or_id")
+    quota_set_parser.add_argument("--profile", help="VPN profile containing the client.")
     quota_set_parser.add_argument("--quota", required=True)
     quota_set_parser.set_defaults(func=command_quota_set)
 
     quota_reset_parser = quota_subparsers.add_parser("reset", help="Reset usage counters for a client.")
     quota_reset_parser.add_argument("name_or_id")
+    quota_reset_parser.add_argument("--profile", help="VPN profile containing the client.")
     quota_reset_parser.add_argument("--enable", action="store_true", help="Enable the client after resetting usage.")
     quota_reset_parser.add_argument("--no-restart", action="store_true")
     quota_reset_parser.set_defaults(func=command_quota_reset)
@@ -817,11 +1044,13 @@ def build_parser() -> argparse.ArgumentParser:
     quota_enforce_parser.set_defaults(func=command_quota_enforce)
 
     usage_parser = subparsers.add_parser("usage", help="Show persisted usage.")
+    usage_parser.add_argument("--profile", help="Only show usage for this VPN profile.")
     usage_parser.add_argument("--refresh", action="store_true", help="Pull and reset current Xray counters before printing.")
     usage_parser.set_defaults(func=command_usage)
 
     link_parser = subparsers.add_parser("link", help="Print a VLESS link for a client.")
     link_parser.add_argument("name_or_id")
+    link_parser.add_argument("--profile", help="VPN profile containing the client.")
     link_parser.add_argument("--qr", action="store_true", help="Write a QR code PNG.")
     link_parser.add_argument("--output", type=Path, default=Path("qrcodes"), help="QR output directory.")
     link_parser.set_defaults(func=command_link)

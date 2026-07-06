@@ -4,8 +4,8 @@ Provision and manage a Docker Compose based Xray VPN server using VLESS + REALIT
 
 The repo includes:
 
-- `vpnctl.py`: one CLI for setup, runtime control, clients, links, QR codes, usage, and monthly quotas
-- `docker-compose.yaml`: Xray runtime using the official `ghcr.io/xtls/xray-core` image
+- `vpnctl.py`: one CLI for setup, runtime control, VPN profiles, clients, links, QR codes, usage, and monthly quotas
+- `docker-compose.yaml`: Xray runtime using the official `ghcr.io/xtls/xray-core` image with host networking so Xray can bind every configured profile port
 - `scripts/install-host.sh`: Ubuntu/Debian host bootstrap with Docker's official apt repository, firewall, and quota timer setup
 
 Generated secrets and runtime config live under `data/` and are ignored by git.
@@ -33,7 +33,7 @@ python3 vpnctl.py init \
   --quota 50GiB
 ```
 
-`--port` controls the public VPN TCP port and the Xray inbound port. Omit it to use the default `443`. If you use a custom port such as `8443`, open that TCP port in `ufw` and in your cloud firewall. `--quota 50GiB` means 50 GiB per calendar month. Usage periods reset on the first day of each UTC month.
+`init` creates the first VPN profile, named `default` unless you pass `--profile NAME`. `--port` controls that profile's public VPN TCP port and Xray inbound port. Omit it to use `443`. If you use a custom port such as `8443`, open that TCP port in `ufw` and in your cloud firewall. `--quota 50GiB` means 50 GiB per calendar month. Usage periods reset on the first day of each UTC month.
 
 Start and validate Xray:
 
@@ -56,7 +56,7 @@ On the server:
 
 - Ubuntu or Debian
 - root or sudo access
-- configured public TCP port reachable from clients, default `443`
+- one or more configured public TCP ports reachable from clients, default `443`
 - Docker Compose plugin, installed from Docker's official apt repository by `scripts/install-host.sh` if missing
 
 For local development without running the host installer:
@@ -67,12 +67,12 @@ python3 -m pip install -r requirements.txt
 
 ## Important Files
 
-- `data/vpn_state.json`: source of truth for private keys, REALITY short ID, clients, monthly quotas, usage period, and usage
+- `data/vpn_state.json`: source of truth for profiles, ports, private keys, REALITY short IDs, clients, monthly quotas, usage period, and usage
 - `data/config.json`: rendered Xray config mounted into the container
 - `qrcodes/`: generated QR code PNG files
 - `.env`: optional Docker Compose overrides such as `XRAY_IMAGE` or `XRAY_CONTAINER_NAME`
 
-Do not commit `data/`, `.env`, QR codes, or any generated state. Losing `data/vpn_state.json` means losing the private keys and client registry for that server.
+Do not commit `data/`, `.env`, QR codes, or any generated state. Losing `data/vpn_state.json` means losing the private keys, profile settings, and client registry for that server.
 
 ## Server Commands
 
@@ -92,24 +92,60 @@ python3 vpnctl.py render
 python3 vpnctl.py restart
 ```
 
+## VPN Profiles
+
+A VPN profile is one VLESS + REALITY inbound. Each profile has its own public port, REALITY target, private/public keypair, short ID, and client list. The rendered Xray config contains one inbound per profile.
+
+List profiles:
+
+```bash
+python3 vpnctl.py profile list
+```
+
+Add another profile on a new port:
+
+```bash
+python3 vpnctl.py profile add backup \
+  --port 8443 \
+  --reality-target www.microsoft.com:443 \
+  --client tablet \
+  --quota 20GiB
+```
+
+Remove a profile and all clients assigned to it:
+
+```bash
+python3 vpnctl.py profile remove backup
+```
+
+Profile ports must be unique and cannot use the local Xray API port `10085`. After adding a profile, open its TCP port in `ufw` and in your cloud firewall.
+
 ## Client Management
 
 List clients:
 
 ```bash
 python3 vpnctl.py client list
+python3 vpnctl.py client list --profile backup
 ```
 
-Add a client:
+Add a client to the default profile:
 
 ```bash
 python3 vpnctl.py client add tablet --quota 20GiB
+```
+
+Add a client to a specific profile:
+
+```bash
+python3 vpnctl.py client add travel-phone --profile backup --quota 20GiB
 ```
 
 Remove a client:
 
 ```bash
 python3 vpnctl.py client remove tablet
+python3 vpnctl.py client remove travel-phone --profile backup
 ```
 
 Disable or re-enable a client:
@@ -117,19 +153,25 @@ Disable or re-enable a client:
 ```bash
 python3 vpnctl.py client disable phone --reason manual
 python3 vpnctl.py client enable phone
+python3 vpnctl.py client disable travel-phone --profile backup --reason manual
+python3 vpnctl.py client enable travel-phone --profile backup
 ```
 
 Get a connection link:
 
 ```bash
 python3 vpnctl.py link phone
+python3 vpnctl.py link travel-phone --profile backup
 ```
 
 Generate a QR code:
 
 ```bash
 python3 vpnctl.py link phone --qr --output qrcodes
+python3 vpnctl.py link travel-phone --profile backup --qr --output qrcodes
 ```
+
+If the same client name exists in more than one profile, pass `--profile` for remove, enable, disable, quota, usage, and link commands.
 
 ## Monthly Traffic Quotas
 
@@ -141,18 +183,21 @@ Set or change a monthly quota:
 
 ```bash
 python3 vpnctl.py quota set phone --quota 100GiB
+python3 vpnctl.py quota set travel-phone --profile backup --quota 100GiB
 ```
 
 Show persisted monthly usage:
 
 ```bash
 python3 vpnctl.py usage
+python3 vpnctl.py usage --profile backup
 ```
 
 Read current Xray counters before showing monthly usage:
 
 ```bash
 python3 vpnctl.py usage --refresh
+python3 vpnctl.py usage --profile backup --refresh
 ```
 
 Manually enforce quotas:
@@ -165,6 +210,7 @@ Reset monthly usage and re-enable a client:
 
 ```bash
 python3 vpnctl.py quota reset phone --enable
+python3 vpnctl.py quota reset travel-phone --profile backup --enable
 ```
 
 The host installer creates `vpnctl-quota.timer`, which runs quota enforcement every 5 minutes.
@@ -187,10 +233,10 @@ python3 vpnctl.py logs
 
 If clients cannot connect:
 
-- confirm the VPS firewall and cloud firewall allow the configured TCP port, default `443`
+- confirm the VPS firewall and cloud firewall allow the profile's configured TCP port, default `443`
 - confirm `--server-host` is the public IP or DNS name clients use
-- confirm `--reality-target` is reachable from the server
-- regenerate the client link with `python3 vpnctl.py link CLIENT_NAME`
+- confirm the profile's `--reality-target` is reachable from the server
+- regenerate the client link with `python3 vpnctl.py link CLIENT_NAME --profile PROFILE_NAME`
 
 If quota usage stays at zero:
 
