@@ -10,14 +10,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import qrcode
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
 
-STATE_VERSION = 2
+STATE_VERSION = 3
 DEFAULT_STATE_PATH = Path("data/vpn_state.json")
 DEFAULT_CONFIG_PATH = Path("data/config.json")
 DEFAULT_COMPOSE_FILE = Path("docker-compose.yaml")
@@ -27,6 +27,10 @@ DEFAULT_API_PORT = 10085
 DEFAULT_FINGERPRINT = "chrome"
 DEFAULT_FLOW = "xtls-rprx-vision"
 DEFAULT_SPIDER_X = "/"
+OUTBOUND_DIRECT = "direct"
+OUTBOUND_PROXY = "proxy"
+OUTBOUND_MODES = {OUTBOUND_DIRECT, OUTBOUND_PROXY}
+UPSTREAM_OUTBOUND_TAG = "main_vpn"
 XRAY_SERVICE = "xray"
 SIZE_UNITS = {
     "b": 1,
@@ -57,6 +61,26 @@ def current_usage_period() -> str:
 
 def encode_x25519_key(key_bytes: bytes) -> str:
     return base64.urlsafe_b64encode(key_bytes).rstrip(b"=").decode("ascii")
+
+
+def decode_x25519_key(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    try:
+        key_bytes = base64.urlsafe_b64decode((value + padding).encode("ascii"))
+    except Exception as error:
+        raise VpnctlError("invalid X25519 key encoding") from error
+    if len(key_bytes) != 32:
+        raise VpnctlError("X25519 keys must decode to 32 bytes")
+    return key_bytes
+
+
+def public_key_from_private(private_key: str) -> str:
+    key = x25519.X25519PrivateKey.from_private_bytes(decode_x25519_key(private_key))
+    public_bytes = key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    return encode_x25519_key(public_bytes)
 
 
 def generate_reality_keys() -> dict[str, str]:
@@ -136,6 +160,89 @@ def split_host_port(target: str) -> tuple[str, int | None]:
     return host, int(port)
 
 
+def first_query_value(query: dict[str, list[str]], key: str, default: str | None = None) -> str | None:
+    values = query.get(key)
+    if not values:
+        return default
+    return values[0]
+
+
+def parse_upstream_link(link: str) -> dict[str, Any]:
+    parsed = urlparse(link.strip())
+    if parsed.scheme != "vless":
+        raise VpnctlError("upstream link must use the vless:// scheme")
+    if not parsed.username:
+        raise VpnctlError("upstream VLESS link is missing the client UUID")
+    try:
+        client_id = str(uuid.UUID(parsed.username))
+    except ValueError as error:
+        raise VpnctlError("upstream VLESS link has an invalid client UUID") from error
+    if not parsed.hostname:
+        raise VpnctlError("upstream VLESS link is missing the host")
+    try:
+        port = parse_port(parsed.port or DEFAULT_PORT)
+    except ValueError as error:
+        raise VpnctlError("upstream VLESS link has an invalid port") from error
+
+    query = parse_qs(parsed.query)
+    security = first_query_value(query, "security")
+    if security != "reality":
+        raise VpnctlError("upstream VLESS link must use security=reality")
+    network = first_query_value(query, "type", "tcp")
+    if network != "tcp":
+        raise VpnctlError("upstream VLESS link must use type=tcp")
+    encryption = first_query_value(query, "encryption", "none")
+    if encryption != "none":
+        raise VpnctlError("upstream VLESS link must use encryption=none")
+
+    public_key = first_query_value(query, "pbk")
+    server_name = first_query_value(query, "sni")
+    short_id = first_query_value(query, "sid") or first_query_value(query, "shortid")
+    if not public_key:
+        raise VpnctlError("upstream VLESS link is missing pbk")
+    if not server_name:
+        raise VpnctlError("upstream VLESS link is missing sni")
+    if short_id is None:
+        raise VpnctlError("upstream VLESS link is missing sid or shortid")
+
+    return {
+        "link_label": unquote(parsed.fragment) if parsed.fragment else None,
+        "host": parsed.hostname,
+        "port": port,
+        "id": client_id,
+        "encryption": encryption,
+        "network": network,
+        "security": security,
+        "public_key": public_key,
+        "server_name": server_name,
+        "short_id": short_id,
+        "fingerprint": first_query_value(query, "fp", DEFAULT_FINGERPRINT),
+        "flow": first_query_value(query, "flow", DEFAULT_FLOW),
+        "spider_x": first_query_value(query, "spx", DEFAULT_SPIDER_X),
+    }
+
+
+def validate_upstream(upstream: dict[str, Any] | None) -> None:
+    if not upstream:
+        raise VpnctlError("upstream VLESS link is required")
+    required_fields = ("host", "port", "id", "public_key", "server_name", "short_id")
+    for field in required_fields:
+        if upstream.get(field) in (None, ""):
+            raise VpnctlError(f"upstream is missing {field}")
+    parse_port(upstream["port"])
+    try:
+        uuid.UUID(upstream["id"])
+    except ValueError as error:
+        raise VpnctlError("upstream has an invalid client UUID") from error
+
+
+def validate_outbound_mode(mode: str | None) -> str:
+    normalized = (mode or OUTBOUND_DIRECT).strip().lower()
+    if normalized not in OUTBOUND_MODES:
+        raise VpnctlError(f"invalid outbound mode: {mode}. Use direct or proxy.")
+    return normalized
+
+
 def safe_client_email(name: str, default_domain: str) -> str:
     local = "".join(char if char.isalnum() or char in "._-" else "-" for char in name)
     local = local.strip(".-_") or "client"
@@ -185,6 +292,7 @@ def create_profile(
     port: int,
     client_names: list[str],
     quota_bytes: int | None,
+    outbound_mode: str = OUTBOUND_DIRECT,
 ) -> dict[str, Any]:
     keys = generate_reality_keys()
     now = utc_now()
@@ -195,6 +303,7 @@ def create_profile(
         "updated_at": now,
         "port": parse_port(port),
         "reality_target": reality_target,
+        "outbound_mode": validate_outbound_mode(outbound_mode),
         "short_id": os.urandom(8).hex(),
         "keys": keys,
         "clients": [
@@ -208,12 +317,31 @@ def create_state(
     server_host: str,
     reality_target: str,
     default_domain: str,
-    port: int,
+    port: int | None,
     client_names: list[str],
     quota_bytes: int | None,
     profile_name: str = DEFAULT_PROFILE_NAME,
+    upstream_link: str | None = None,
+    mode: str = OUTBOUND_DIRECT,
+    direct_port: int = DEFAULT_PORT,
+    proxy_port: int = 8443,
 ) -> dict[str, Any]:
     now = utc_now()
+    init_mode = mode.strip().lower()
+    if init_mode not in {"direct", "proxy", "both"}:
+        raise VpnctlError("init mode must be direct, proxy, or both")
+    upstream = parse_upstream_link(upstream_link) if upstream_link else None
+    profiles: list[dict[str, Any]]
+    if init_mode == "both":
+        profiles = [
+            create_profile("direct", reality_target, default_domain, direct_port, client_names, quota_bytes, OUTBOUND_DIRECT),
+            create_profile("proxy", reality_target, default_domain, proxy_port, client_names, quota_bytes, OUTBOUND_PROXY),
+        ]
+    else:
+        profile_port = port if port is not None else DEFAULT_PORT
+        profiles = [
+            create_profile(profile_name, reality_target, default_domain, profile_port, client_names, quota_bytes, init_mode)
+        ]
     return {
         "version": STATE_VERSION,
         "created_at": now,
@@ -224,10 +352,179 @@ def create_state(
         "fingerprint": DEFAULT_FINGERPRINT,
         "flow": DEFAULT_FLOW,
         "spider_x": DEFAULT_SPIDER_X,
-        "profiles": [
-            create_profile(profile_name, reality_target, default_domain, port, client_names, quota_bytes)
-        ],
+        "upstream": upstream,
+        "profiles": profiles,
     }
+
+
+def imported_profile_name(tag: str | None, fallback: str) -> str:
+    raw = tag or fallback
+    if raw.startswith("vless_reality_"):
+        raw = raw.removeprefix("vless_reality_")
+    return validate_profile_name(raw or fallback)
+
+
+def infer_default_domain(config: dict[str, Any], fallback: str) -> str:
+    domains: set[str] = set()
+    for inbound in config.get("inbounds", []):
+        for client in inbound.get("settings", {}).get("clients", []):
+            email = client.get("email", "")
+            if "@" in email:
+                domains.add(email.rsplit("@", 1)[1])
+    return domains.pop() if len(domains) == 1 else fallback
+
+
+def imported_client_name(email: str, client_id: str, profile_name: str) -> str:
+    if email and "@" in email:
+        local = email.rsplit("@", 1)[0]
+    else:
+        local = client_id
+    prefix = f"{profile_name}-"
+    if local.startswith(prefix):
+        local = local[len(prefix):]
+    return local or client_id
+
+
+def import_client(client: dict[str, Any], profile_name: str, default_domain: str) -> dict[str, Any]:
+    now = utc_now()
+    client_id = client.get("id")
+    if not client_id:
+        raise VpnctlError(f"profile {profile_name} has a VLESS client without id")
+    email = client.get("email") or safe_client_email(imported_client_name("", client_id, profile_name), default_domain)
+    return {
+        "name": imported_client_name(email, client_id, profile_name),
+        "id": client_id,
+        "email": email,
+        "enabled": True,
+        "quota_bytes": None,
+        "used_uplink_bytes": 0,
+        "used_downlink_bytes": 0,
+        "created_at": now,
+        "updated_at": now,
+        "disabled_reason": None,
+    }
+
+
+def routing_outbound_by_inbound(config: dict[str, Any]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for rule in config.get("routing", {}).get("rules", []):
+        outbound_tag = rule.get("outboundTag")
+        inbound_tags = rule.get("inboundTag", [])
+        if isinstance(inbound_tags, str):
+            inbound_tags = [inbound_tags]
+        for inbound_tag in inbound_tags:
+            if inbound_tag and outbound_tag:
+                result[inbound_tag] = outbound_tag
+    return result
+
+
+def import_upstream_from_outbound(outbound: dict[str, Any]) -> dict[str, Any]:
+    stream_settings = outbound.get("streamSettings", {})
+    reality_settings = stream_settings.get("realitySettings", {})
+    vnext = outbound.get("settings", {}).get("vnext", [])
+    if not vnext:
+        raise VpnctlError("upstream outbound is missing vnext")
+    server = vnext[0]
+    users = server.get("users", [])
+    if not users:
+        raise VpnctlError("upstream outbound is missing users")
+    user = users[0]
+    return {
+        "link_label": None,
+        "host": server.get("address"),
+        "port": parse_port(server.get("port", DEFAULT_PORT)),
+        "id": user.get("id"),
+        "encryption": user.get("encryption", "none"),
+        "network": stream_settings.get("network", "tcp"),
+        "security": stream_settings.get("security", "reality"),
+        "public_key": reality_settings.get("publicKey"),
+        "server_name": reality_settings.get("serverName"),
+        "short_id": reality_settings.get("shortId", ""),
+        "fingerprint": reality_settings.get("fingerprint", DEFAULT_FINGERPRINT),
+        "flow": user.get("flow", DEFAULT_FLOW),
+        "spider_x": reality_settings.get("spiderX", DEFAULT_SPIDER_X),
+    }
+
+
+def import_state_from_xray_config(
+    config: dict[str, Any],
+    server_host: str,
+    default_domain: str | None = None,
+) -> dict[str, Any]:
+    now = utc_now()
+    domain = default_domain or infer_default_domain(config, server_host)
+    route_by_inbound = routing_outbound_by_inbound(config)
+    upstream = None
+    upstream_tag = None
+    for outbound in config.get("outbounds", []):
+        stream_settings = outbound.get("streamSettings", {})
+        if outbound.get("tag") == UPSTREAM_OUTBOUND_TAG or (
+            upstream is None
+            and outbound.get("protocol") == "vless"
+            and stream_settings.get("security") == "reality"
+        ):
+            upstream = import_upstream_from_outbound(outbound)
+            upstream_tag = outbound.get("tag")
+            if upstream_tag == UPSTREAM_OUTBOUND_TAG:
+                break
+
+    profiles: list[dict[str, Any]] = []
+    profile_index = 1
+    for inbound in config.get("inbounds", []):
+        if inbound.get("protocol") != "vless":
+            continue
+        stream_settings = inbound.get("streamSettings", {})
+        if stream_settings.get("security") != "reality":
+            continue
+        reality_settings = stream_settings.get("realitySettings", {})
+        private_key = reality_settings.get("privateKey")
+        short_ids = reality_settings.get("shortIds") or []
+        if not private_key or not short_ids:
+            raise VpnctlError(f"inbound {inbound.get('tag', profile_index)} is missing REALITY privateKey or shortIds")
+        tag = inbound.get("tag") or f"profile{profile_index}"
+        profile_name = imported_profile_name(tag, f"profile{profile_index}")
+        outbound_tag = route_by_inbound.get(tag, OUTBOUND_DIRECT)
+        outbound_mode = OUTBOUND_PROXY if upstream_tag and outbound_tag == upstream_tag else OUTBOUND_DIRECT
+        clients = [
+            import_client(client, profile_name, domain)
+            for client in inbound.get("settings", {}).get("clients", [])
+        ]
+        profiles.append(
+            {
+                "name": profile_name,
+                "created_at": now,
+                "updated_at": now,
+                "port": parse_port(inbound.get("port", DEFAULT_PORT)),
+                "reality_target": reality_settings.get("target") or reality_settings.get("dest") or "www.cloudflare.com:443",
+                "outbound_mode": outbound_mode,
+                "short_id": short_ids[0],
+                "keys": {
+                    "private_key": private_key,
+                    "public_key": public_key_from_private(private_key),
+                },
+                "clients": clients,
+            }
+        )
+        profile_index += 1
+
+    if not profiles:
+        raise VpnctlError("Xray config has no VLESS + REALITY inbounds to import")
+
+    state = {
+        "version": STATE_VERSION,
+        "created_at": now,
+        "updated_at": now,
+        "usage_period": current_usage_period(),
+        "server_host": server_host,
+        "default_domain": domain,
+        "fingerprint": DEFAULT_FINGERPRINT,
+        "flow": DEFAULT_FLOW,
+        "spider_x": DEFAULT_SPIDER_X,
+        "upstream": upstream,
+        "profiles": profiles,
+    }
+    validate_state(state)
+    return state
 
 
 def deduplicate_names(names: list[str]) -> list[str]:
@@ -281,10 +578,22 @@ def profile_tag(profile: dict[str, Any]) -> str:
     return f"vless_reality_{safe_name or DEFAULT_PROFILE_NAME}"
 
 
+def profile_outbound_mode(profile: dict[str, Any]) -> str:
+    return validate_outbound_mode(profile.get("outbound_mode", OUTBOUND_DIRECT))
+
+
+def proxy_profiles(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [profile for profile in all_profiles(state) if profile_outbound_mode(profile) == OUTBOUND_PROXY]
+
+
 def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> None:
     profiles = all_profiles(state)
     if not profiles:
         raise VpnctlError("at least one profile is required")
+    if proxy_profiles(state):
+        validate_upstream(state.get("upstream"))
+    elif state.get("upstream"):
+        validate_upstream(state.get("upstream"))
 
     names: set[str] = set()
     ports: dict[int, str] = {}
@@ -292,6 +601,7 @@ def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> N
     ids: dict[str, str] = {}
     for profile in profiles:
         name = validate_profile_name(profile_label(profile))
+        profile["outbound_mode"] = profile_outbound_mode(profile)
         if name in names:
             raise VpnctlError(f"duplicate profile name: {name}")
         names.add(name)
@@ -321,6 +631,15 @@ def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> N
 def migrate_legacy_state(raw: dict[str, Any]) -> dict[str, Any]:
     if raw.get("version") == STATE_VERSION:
         raw.setdefault("usage_period", current_usage_period())
+        validate_state(raw)
+        return raw
+
+    if raw.get("version") == 2 and "profiles" in raw:
+        raw["version"] = STATE_VERSION
+        raw.setdefault("usage_period", current_usage_period())
+        raw.setdefault("upstream", None)
+        for profile in all_profiles(raw):
+            profile.setdefault("outbound_mode", OUTBOUND_DIRECT)
         validate_state(raw)
         return raw
 
@@ -354,6 +673,7 @@ def migrate_legacy_state(raw: dict[str, Any]) -> dict[str, Any]:
             "fingerprint": raw.get("fingerprint", DEFAULT_FINGERPRINT),
             "flow": raw.get("flow", DEFAULT_FLOW),
             "spider_x": raw.get("spider_x", DEFAULT_SPIDER_X),
+            "upstream": raw.get("upstream"),
             "profiles": [
                 {
                     "name": DEFAULT_PROFILE_NAME,
@@ -361,6 +681,7 @@ def migrate_legacy_state(raw: dict[str, Any]) -> dict[str, Any]:
                     "updated_at": raw.get("updated_at", now),
                     "port": int(raw.get("port", DEFAULT_PORT)),
                     "reality_target": raw.get("reality_target") or raw.get("dest", "www.cloudflare.com:443"),
+                    "outbound_mode": raw.get("outbound_mode", OUTBOUND_DIRECT),
                     "short_id": raw["short_id"],
                     "keys": raw["keys"],
                     "clients": migrated_clients,
@@ -438,6 +759,57 @@ def render_vless_inbound(state: dict[str, Any], profile: dict[str, Any]) -> dict
     }
 
 
+def render_upstream_outbound(state: dict[str, Any]) -> dict[str, Any]:
+    upstream = state["upstream"]
+    user = {
+        "id": upstream["id"],
+        "encryption": "none",
+    }
+    flow = upstream.get("flow")
+    if flow:
+        user["flow"] = flow
+
+    return {
+        "tag": UPSTREAM_OUTBOUND_TAG,
+        "protocol": "vless",
+        "settings": {
+            "vnext": [
+                {
+                    "address": upstream["host"],
+                    "port": parse_port(upstream["port"]),
+                    "users": [user],
+                }
+            ]
+        },
+        "streamSettings": {
+            "network": upstream.get("network", "tcp"),
+            "security": "reality",
+            "realitySettings": {
+                "serverName": upstream["server_name"],
+                "fingerprint": upstream.get("fingerprint", DEFAULT_FINGERPRINT),
+                "publicKey": upstream["public_key"],
+                "shortId": upstream["short_id"],
+                "spiderX": upstream.get("spider_x", DEFAULT_SPIDER_X),
+            },
+        },
+    }
+
+
+def render_direct_outbound() -> dict[str, Any]:
+    return {
+        "tag": OUTBOUND_DIRECT,
+        "protocol": "freedom",
+        "settings": {},
+    }
+
+
+def profile_outbound_tag(profile: dict[str, Any]) -> str:
+    mode = profile_outbound_mode(profile)
+    if mode == OUTBOUND_PROXY:
+        return UPSTREAM_OUTBOUND_TAG
+    return OUTBOUND_DIRECT
+
+
 def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> dict[str, Any]:
     validate_state(state, api_port)
     inbounds = [render_vless_inbound(state, profile) for profile in all_profiles(state)]
@@ -450,6 +822,26 @@ def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> di
             "settings": {"address": "127.0.0.1"},
         }
     )
+
+    outbounds = [render_direct_outbound()]
+    if proxy_profiles(state):
+        outbounds.append(render_upstream_outbound(state))
+
+    routing_rules = [
+        {
+            "type": "field",
+            "inboundTag": ["api"],
+            "outboundTag": "api",
+        }
+    ]
+    for profile in all_profiles(state):
+        routing_rules.append(
+            {
+                "type": "field",
+                "inboundTag": [profile_tag(profile)],
+                "outboundTag": profile_outbound_tag(profile),
+            }
+        )
 
     return {
         "log": {
@@ -476,21 +868,9 @@ def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> di
             },
         },
         "inbounds": inbounds,
-        "outbounds": [
-            {
-                "tag": "direct",
-                "protocol": "freedom",
-                "settings": {},
-            }
-        ],
+        "outbounds": outbounds,
         "routing": {
-            "rules": [
-                {
-                    "type": "field",
-                    "inboundTag": ["api"],
-                    "outboundTag": "api",
-                }
-            ]
+            "rules": routing_rules
         },
         "stats": {},
     }
@@ -730,7 +1110,7 @@ def command_profile_list(args: argparse.Namespace) -> None:
         enabled_count = sum(1 for client in clients if client.get("enabled", True))
         print(
             f"{profile_label(profile)}\tport={profile['port']}\treality_target={profile['reality_target']}"
-            f"\tclients={enabled_count}/{len(clients)}"
+            f"\toutbound={profile_outbound_mode(profile)}\tclients={enabled_count}/{len(clients)}"
         )
 
 
@@ -741,6 +1121,7 @@ def command_profile_add(args: argparse.Namespace) -> None:
     if find_profile(state, profile_name):
         raise VpnctlError(f"profile already exists: {profile_name}")
     quota_bytes = parse_size(args.quota)
+    outbound_mode = args.outbound or OUTBOUND_DIRECT
     profile = create_profile(
         profile_name,
         args.reality_target,
@@ -748,10 +1129,11 @@ def command_profile_add(args: argparse.Namespace) -> None:
         args.port,
         args.client or [],
         quota_bytes,
+        outbound_mode,
     )
     state["profiles"].append(profile)
     persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
-    print(f"Profile added: {profile_label(profile)} on port {profile['port']}")
+    print(f"Profile added: {profile_label(profile)} on port {profile['port']} outbound={profile_outbound_mode(profile)}")
     for client in profile["clients"]:
         print(f"Client {profile_label(profile)}/{client['name']}: {generate_vless_link(client, state, profile)}")
 
@@ -767,6 +1149,16 @@ def command_profile_remove(args: argparse.Namespace) -> None:
     print(f"Profile removed: {profile_label(profile)}")
 
 
+def command_profile_outbound(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    ensure_monthly_period(state)
+    profile = require_profile(state, args.name)
+    profile["outbound_mode"] = validate_outbound_mode(args.outbound)
+    profile["updated_at"] = utc_now()
+    persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
+    print(f"Profile outbound updated: {profile_label(profile)} outbound={profile_outbound_mode(profile)}")
+
+
 def command_init(args: argparse.Namespace) -> None:
     if args.state.exists() and not args.force:
         raise VpnctlError(f"state already exists: {args.state}. Use --force to overwrite it.")
@@ -780,14 +1172,66 @@ def command_init(args: argparse.Namespace) -> None:
         client_names=args.client,
         quota_bytes=quota_bytes,
         profile_name=args.profile,
+        upstream_link=args.upstream_link,
+        mode=args.mode,
+        direct_port=args.direct_port,
+        proxy_port=args.proxy_port,
     )
     save_state(args.state, state)
     render_and_save_config(state, args.config)
     print(f"State saved to {args.state}")
     print(f"Xray config rendered to {args.config}")
-    profile = require_profile(state, args.profile)
-    for client in profile["clients"]:
-        print(f"Client {profile_label(profile)}/{client['name']}: {generate_vless_link(client, state, profile)}")
+    for profile in all_profiles(state):
+        for client in profile["clients"]:
+            print(f"Client {profile_label(profile)}/{client['name']}: {generate_vless_link(client, state, profile)}")
+
+
+def command_import_config(args: argparse.Namespace) -> None:
+    if args.state.exists() and not args.force:
+        raise VpnctlError(f"state already exists: {args.state}. Use --force to overwrite it.")
+    config = load_json(args.input)
+    state = import_state_from_xray_config(config, args.server_host, args.default_domain)
+    save_state(args.state, state)
+    render_and_save_config(state, args.config)
+    print(f"Imported Xray config from {args.input}")
+    print(f"State saved to {args.state}")
+    print(f"Xray config rendered to {args.config}")
+    for profile in all_profiles(state):
+        print(
+            f"Profile {profile_label(profile)}: port={profile['port']} "
+            f"outbound={profile_outbound_mode(profile)} clients={len(profile.get('clients', []))}"
+        )
+
+
+def command_upstream_show(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    upstream = state.get("upstream")
+    if not upstream:
+        print("No upstream configured.")
+        return
+    label = upstream.get("link_label") or "-"
+    print(
+        f"host={upstream['host']}\tport={upstream['port']}\tsni={upstream['server_name']}"
+        f"\tfingerprint={upstream.get('fingerprint', DEFAULT_FINGERPRINT)}"
+        f"\tflow={upstream.get('flow') or '-'}\tlabel={label}"
+    )
+
+
+def command_upstream_set(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    state["upstream"] = parse_upstream_link(args.link)
+    persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
+    upstream = state["upstream"]
+    print(f"Upstream set: {upstream['host']}:{upstream['port']} sni={upstream['server_name']}")
+
+
+def command_upstream_clear(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    if proxy_profiles(state):
+        raise VpnctlError("cannot clear upstream while proxy profiles exist")
+    state["upstream"] = None
+    persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
+    print("Upstream cleared.")
 
 
 def command_render(args: argparse.Namespace) -> None:
@@ -961,17 +1405,40 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser("init", help="Create state and render the initial Xray config.")
     init_parser.add_argument("--server-host", required=True, help="Public IP or DNS name clients connect to.")
+    init_parser.add_argument("--upstream-link", help="VLESS + REALITY client link for an upstream VPN.")
     init_parser.add_argument("--reality-target", required=True, help="REALITY target, for example www.cloudflare.com:443.")
     init_parser.add_argument("--default-domain", help="Domain used in generated client emails. Defaults to server host.")
-    init_parser.add_argument("--port", type=parse_port, default=DEFAULT_PORT, help="Public VLESS port.")
-    init_parser.add_argument("--profile", default=DEFAULT_PROFILE_NAME, help="Initial VPN profile name.")
+    init_parser.add_argument("--mode", choices=["direct", "proxy", "both"], default=OUTBOUND_DIRECT, help="Initial outbound profile mode.")
+    init_parser.add_argument("--port", type=parse_port, help="Public VLESS port for direct-only or proxy-only init. Defaults to 443.")
+    init_parser.add_argument("--direct-port", type=parse_port, default=DEFAULT_PORT, help="Public VLESS port for the direct profile in both mode.")
+    init_parser.add_argument("--proxy-port", type=parse_port, default=8443, help="Public VLESS port for the proxy profile in both mode.")
+    init_parser.add_argument("--profile", default=DEFAULT_PROFILE_NAME, help="Initial profile name for direct-only or proxy-only init.")
     init_parser.add_argument("--client", action="append", required=True, help="Initial client name. Repeatable.")
     init_parser.add_argument("--quota", help="Optional initial monthly quota for all created clients, for example 50GiB.")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing state.")
     init_parser.set_defaults(func=command_init)
 
+    import_parser = subparsers.add_parser("import-config", help="Import an existing Xray JSON config into vpnctl state.")
+    import_parser.add_argument("--input", type=Path, required=True, help="Existing Xray config JSON to import.")
+    import_parser.add_argument("--server-host", required=True, help="Public IP or DNS name clients connect to.")
+    import_parser.add_argument("--default-domain", help="Domain used in imported client emails. Defaults to inferred email domain or server host.")
+    import_parser.add_argument("--force", action="store_true", help="Overwrite existing state.")
+    import_parser.set_defaults(func=command_import_config)
+
     render_parser = subparsers.add_parser("render", help="Render config from state.")
     render_parser.set_defaults(func=command_render)
+
+    upstream_parser = subparsers.add_parser("upstream", help="Show or change the upstream VPN.")
+    upstream_subparsers = upstream_parser.add_subparsers(dest="upstream_command", required=True)
+    upstream_show_parser = upstream_subparsers.add_parser("show", help="Show the configured upstream without printing UUIDs.")
+    upstream_show_parser.set_defaults(func=command_upstream_show)
+    upstream_set_parser = upstream_subparsers.add_parser("set", help="Replace the upstream VPN link.")
+    upstream_set_parser.add_argument("--link", required=True, help="VLESS + REALITY client link for an upstream VPN.")
+    upstream_set_parser.add_argument("--no-restart", action="store_true")
+    upstream_set_parser.set_defaults(func=command_upstream_set)
+    upstream_clear_parser = upstream_subparsers.add_parser("clear", help="Clear upstream when no proxy profiles exist.")
+    upstream_clear_parser.add_argument("--no-restart", action="store_true")
+    upstream_clear_parser.set_defaults(func=command_upstream_clear)
 
     profile_parser = subparsers.add_parser("profile", help="Manage VPN profiles.")
     profile_subparsers = profile_parser.add_subparsers(dest="profile_command", required=True)
@@ -981,6 +1448,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile_add_parser = profile_subparsers.add_parser("add", help="Add a VPN profile on another port.")
     profile_add_parser.add_argument("name")
     profile_add_parser.add_argument("--port", type=parse_port, required=True, help="Public VLESS port for this profile.")
+    profile_add_parser.add_argument("--outbound", choices=["direct", "proxy"], help="Outbound route for this profile.")
     profile_add_parser.add_argument("--reality-target", required=True, help="REALITY target, for example www.cloudflare.com:443.")
     profile_add_parser.add_argument("--client", action="append", help="Initial client name. Repeatable.")
     profile_add_parser.add_argument("--quota", help="Optional initial monthly quota for created clients, for example 50GiB.")
@@ -991,6 +1459,12 @@ def build_parser() -> argparse.ArgumentParser:
     profile_remove_parser.add_argument("name")
     profile_remove_parser.add_argument("--no-restart", action="store_true")
     profile_remove_parser.set_defaults(func=command_profile_remove)
+
+    profile_outbound_parser = profile_subparsers.add_parser("outbound", help="Change a profile outbound route.")
+    profile_outbound_parser.add_argument("name")
+    profile_outbound_parser.add_argument("--outbound", choices=["direct", "proxy"], required=True)
+    profile_outbound_parser.add_argument("--no-restart", action="store_true")
+    profile_outbound_parser.set_defaults(func=command_profile_outbound)
 
     client_parser = subparsers.add_parser("client", help="Manage clients.")
     client_subparsers = client_parser.add_subparsers(dest="client_command", required=True)
@@ -1082,7 +1556,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         args.func(args)
-    except (VpnctlError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+    except (VpnctlError, subprocess.CalledProcessError, json.JSONDecodeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     return 0

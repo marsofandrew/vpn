@@ -33,7 +33,7 @@ python3 vpnctl.py init \
   --quota 50GiB
 ```
 
-`init` creates the first VPN profile, named `default` unless you pass `--profile NAME`. `--port` controls that profile's public VPN TCP port and Xray inbound port. Omit it to use `443`. If you use a custom port such as `8443`, open that TCP port in `ufw` and in your cloud firewall. `--quota 50GiB` means 50 GiB per calendar month. Usage periods reset on the first day of each UTC month.
+`init` creates the first direct VPN profile, named `default` unless you pass `--profile NAME`. `--port` controls that profile's public VPN TCP port and Xray inbound port. Omit it to use `443`. If you use a custom port such as `8443`, open that TCP port in `ufw` and in your cloud firewall. `--quota 50GiB` means 50 GiB per calendar month. Usage periods reset on the first day of each UTC month.
 
 Start and validate Xray:
 
@@ -67,7 +67,7 @@ python3 -m pip install -r requirements.txt
 
 ## Important Files
 
-- `data/vpn_state.json`: source of truth for profiles, ports, private keys, REALITY short IDs, clients, monthly quotas, usage period, and usage
+- `data/vpn_state.json`: source of truth for upstream settings, profiles, outbound routes, ports, private keys, REALITY short IDs, clients, monthly quotas, usage period, and usage
 - `data/config.json`: rendered Xray config mounted into the container
 - `qrcodes/`: generated QR code PNG files
 - `.env`: optional Docker Compose overrides such as `XRAY_IMAGE` or `XRAY_CONTAINER_NAME`
@@ -92,9 +92,63 @@ python3 vpnctl.py render
 python3 vpnctl.py restart
 ```
 
+## Outbound Modes
+
+Each profile has an outbound route:
+
+- `direct`: exits to the internet from this VPS. This is the default and preserves the original behavior.
+- `proxy`: routes through a configured upstream VLESS + REALITY VPN link.
+
+Create a proxy-only server:
+
+```bash
+python3 vpnctl.py init \
+  --server-host YOUR_SERVER_IP_OR_DOMAIN \
+  --mode proxy \
+  --upstream-link 'VLESS_LINK_FROM_UPSTREAM_VPN' \
+  --reality-target www.cloudflare.com:443 \
+  --client phone
+```
+
+Create direct and proxy profiles together:
+
+```bash
+python3 vpnctl.py init \
+  --server-host YOUR_SERVER_IP_OR_DOMAIN \
+  --mode both \
+  --upstream-link 'VLESS_LINK_FROM_UPSTREAM_VPN' \
+  --reality-target www.cloudflare.com:443 \
+  --client phone
+```
+
+By default, `--mode both` creates `direct` on TCP `443` and `proxy` on TCP `8443`.
+Use `--direct-port` and `--proxy-port` to change those ports.
+
+Manage the upstream link:
+
+```bash
+python3 vpnctl.py upstream show
+python3 vpnctl.py upstream set --link 'NEW_VLESS_LINK_FROM_UPSTREAM_VPN'
+python3 vpnctl.py upstream clear
+```
+
+`upstream clear` is allowed only when no profiles use `outbound=proxy`.
+
+## Import Existing Xray Config
+
+Import an existing Xray JSON config into `vpnctl` state:
+
+```bash
+python3 vpnctl.py import-config \
+  --input /path/to/config.json \
+  --server-host YOUR_SERVER_IP_OR_DOMAIN
+```
+
+The config must contain VLESS + REALITY inbounds. If it has a VLESS + REALITY outbound used by routing rules, imported profiles using that route become `proxy`; other profiles become `direct`. Imported quotas are unlimited and usage counters start at zero. Pass `--default-domain DOMAIN` if imported client emails do not share one domain.
+
 ## VPN Profiles
 
-A VPN profile is one VLESS + REALITY inbound. Each profile has its own public port, REALITY target, private/public keypair, short ID, and client list. The rendered Xray config contains one inbound per profile.
+A VPN profile is one VLESS + REALITY inbound. Each profile has its own public port, REALITY target, outbound route, private/public keypair, short ID, and client list. The rendered Xray config contains one inbound per profile.
 
 List profiles:
 
@@ -107,9 +161,27 @@ Add another profile on a new port:
 ```bash
 python3 vpnctl.py profile add backup \
   --port 8443 \
+  --outbound direct \
   --reality-target www.microsoft.com:443 \
   --client tablet \
   --quota 20GiB
+```
+
+Add a profile that proxies through the upstream VPN:
+
+```bash
+python3 vpnctl.py profile add upstream-exit \
+  --port 9443 \
+  --outbound proxy \
+  --reality-target www.cloudflare.com:443 \
+  --client tablet
+```
+
+Change an existing profile's outbound route:
+
+```bash
+python3 vpnctl.py profile outbound backup --outbound proxy
+python3 vpnctl.py profile outbound backup --outbound direct
 ```
 
 Remove a profile and all clients assigned to it:
@@ -236,6 +308,7 @@ If clients cannot connect:
 - confirm the VPS firewall and cloud firewall allow the profile's configured TCP port, default `443`
 - confirm `--server-host` is the public IP or DNS name clients use
 - confirm the profile's `--reality-target` is reachable from the server
+- for proxy profiles, confirm the upstream VPN link is configured and reachable from this VPS
 - regenerate the client link with `python3 vpnctl.py link CLIENT_NAME --profile PROFILE_NAME`
 
 If quota usage stays at zero:
