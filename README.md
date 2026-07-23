@@ -311,6 +311,16 @@ If clients cannot connect:
 - for proxy profiles, confirm the upstream VPN link is configured and reachable from this VPS
 - regenerate the client link with `python3 vpnctl.py link CLIENT_NAME --profile PROFILE_NAME`
 
+If Xray fails with `bind: permission denied` on TCP `443`, recreate the container so it gets the Compose settings that allow binding privileged ports:
+
+```bash
+docker compose down
+docker compose up -d
+python3 vpnctl.py logs
+```
+
+Alternatively, use profile ports above `1024`, such as `8443` and `9443`, and open those ports in `ufw` and your cloud firewall.
+
 If quota usage stays at zero:
 
 - confirm clients have an `email` in `data/config.json`

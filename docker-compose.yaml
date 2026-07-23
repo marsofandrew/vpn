@@ -4,6 +4,9 @@ services:
     container_name: ${XRAY_CONTAINER_NAME:-xray-vless-reality}
     restart: unless-stopped
     network_mode: host
+    user: "0:0"
+    cap_add:
+      - NET_BIND_SERVICE
     volumes:
       - ./data/config.json:/etc/xray/config.json:ro
       - xray_logs:/var/log/xray
