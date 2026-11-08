@@ -2,6 +2,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -27,6 +28,9 @@ def default_client(state):
 
 class VpnctlTests(unittest.TestCase):
     def setUp(self) -> None:
+        health_patch = patch.object(vpnctl, "verify_xray")
+        health_patch.start()
+        self.addCleanup(health_patch.stop)
         self.original_current_usage_period = vpnctl.current_usage_period
         self.original_run_compose = vpnctl.run_compose
 
@@ -292,6 +296,7 @@ class VpnctlTests(unittest.TestCase):
                 captured["args"] = args
                 captured["capture"] = capture
                 captured["port"] = port
+                return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
             vpnctl.run_compose = fake_run_compose
             args = type(
@@ -307,7 +312,7 @@ class VpnctlTests(unittest.TestCase):
             vpnctl.command_compose(args, ["up", "-d"])
 
             self.assertIsNone(captured["port"])
-            self.assertEqual(captured["args"], ["up", "-d"])
+            self.assertEqual(captured["args"], ["up", "-d", "--force-recreate", vpnctl.XRAY_SERVICE])
 
     def test_quota_enforcement_accumulates_xray_stats_and_disables_client(self) -> None:
         state = vpnctl.create_state(
@@ -611,6 +616,7 @@ class VpnctlTests(unittest.TestCase):
 
             def fake_run_compose(compose_file: Path, args: list[str], capture: bool = False, port: int | None = None):
                 calls.append((compose_file, args, capture, port))
+                return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
             vpnctl.run_compose = fake_run_compose
             output = StringIO()
@@ -684,7 +690,8 @@ class VpnctlTests(unittest.TestCase):
             backup = next(profile for profile in state["profiles"] if profile["name"] == "backup")
             self.assertEqual(backup["clients"], [])
             self.assertEqual([inbound["port"] for inbound in config["inbounds"][:2]], [443, 8443])
-            self.assertEqual([call[1] for call in calls], [["up", "-d", vpnctl.XRAY_SERVICE], ["up", "-d", vpnctl.XRAY_SERVICE]])
+            self.assertEqual([call[1] for call in calls if call[1][0] == "up"],
+                             [["up", "-d", "--force-recreate", vpnctl.XRAY_SERVICE]] * 2)
 
     def test_profile_outbound_and_upstream_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -692,7 +699,7 @@ class VpnctlTests(unittest.TestCase):
             config_path = Path(tmp_dir) / "config.json"
             compose_path = Path(tmp_dir) / "docker-compose.yaml"
             compose_path.write_text("services: {}\n")
-            vpnctl.run_compose = lambda compose_file, args, capture=False: None
+            vpnctl.run_compose = lambda compose_file, args, capture=False: subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
             self.assertEqual(
                 vpnctl.main(

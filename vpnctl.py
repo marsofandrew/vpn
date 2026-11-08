@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 import argparse
 import base64
+import fcntl
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
+import tempfile
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -720,12 +725,55 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2)
-        handle.write("\n")
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        sync_directory(path.parent)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def state_lock(path: Path):
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(descriptor, "a") as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def backup_path(path: Path) -> Path:
+    return path.with_name(path.name + ".bak")
 
 
 def load_state(path: Path) -> dict[str, Any]:
+    backup = backup_path(path)
+    if path.exists() or backup.exists():
+        try:
+            state = migrate_legacy_state(load_json(path))
+            os.chmod(path, 0o600)
+            return state
+        except (OSError, ValueError, KeyError, TypeError, VpnctlError):
+            state = migrate_legacy_state(load_json(backup))
+            write_json(path, state)
+            print("Recovered state from validated backup.", file=sys.stderr)
+            return state
     if not path.exists():
         legacy_path = Path("vpn_config.json")
         if legacy_path.exists():
@@ -737,6 +785,9 @@ def load_state(path: Path) -> dict[str, Any]:
 def save_state(path: Path, state: dict[str, Any]) -> None:
     validate_state(state)
     state["updated_at"] = utc_now()
+    if path.exists():
+        previous = migrate_legacy_state(load_json(path))
+        write_json(backup_path(path), previous)
     write_json(path, state)
 
 
@@ -864,8 +915,7 @@ def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> di
 
     return {
         "log": {
-            "access": "/var/log/xray/access.log",
-            "error": "/var/log/xray/error.log",
+            "access": "none",
             "loglevel": "warning",
         },
         "api": {
@@ -896,7 +946,8 @@ def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> di
 
 
 def render_and_save_config(state: dict[str, Any], config_path: Path) -> None:
-    write_json(config_path, render_config(state))
+    destination = config_path.with_name(config_path.name + ".pending") if config_path.exists() else config_path
+    write_json(destination, render_config(state))
 
 
 def ensure_monthly_period(state: dict[str, Any]) -> bool:
@@ -927,10 +978,12 @@ def persist_state_and_config(
     compose_file: Path | None = None,
     restart: bool = False,
 ) -> None:
-    save_state(state_path, state)
-    render_and_save_config(state, config_path)
+    candidate = render_config(state)
     if restart and compose_file is not None:
-        restart_xray(compose_file, state)
+        deploy_config(state, state_path, config_path, compose_file, candidate)
+    else:
+        save_state(state_path, state)
+        write_json(config_path.with_name(config_path.name + ".pending"), candidate)
 
 
 def find_client(
@@ -987,7 +1040,10 @@ def write_qr(link: str, client_name: str, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     qr_path = output_dir / f"{client_name}.png"
     image = qrcode.make(link)
-    image.save(qr_path)
+    descriptor = os.open(qr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        image.save(handle, format="PNG")
     return qr_path
 
 
@@ -1034,6 +1090,7 @@ def run_compose(
             check=True,
             text=True,
             capture_output=capture,
+            timeout=None if "--follow" in args or "-f" in args else 120,
         )
     except subprocess.CalledProcessError as error:
         if is_docker_permission_error(error):
@@ -1042,7 +1099,153 @@ def run_compose(
 
 
 def restart_xray(compose_file: Path, state: dict[str, Any] | None = None) -> None:
-    run_compose(compose_file, ["up", "-d", XRAY_SERVICE])
+    run_compose(compose_file, ["up", "-d", "--force-recreate", XRAY_SERVICE], capture=True)
+
+
+def runtime_epoch(compose_file: Path) -> str:
+    result = run_compose(compose_file, ["ps", "-q", XRAY_SERVICE], capture=True)
+    container_id = result.stdout.strip()
+    if not container_id:
+        raise VpnctlError("Xray is not running")
+    result = subprocess.run(
+        ["docker", "inspect", "--format", "{{.Id}} {{.State.StartedAt}} {{.State.Running}}", container_id],
+        check=True, capture_output=True, text=True, timeout=15,
+    )
+    if not result.stdout.strip().endswith(" true"):
+        raise VpnctlError("Xray is not running")
+    return result.stdout.strip()
+
+
+def sample_usage(state: dict[str, Any], compose_file: Path) -> None:
+    before = runtime_epoch(compose_file)
+    stats = query_xray_stats(compose_file, reset=False, state=state)
+    if runtime_epoch(compose_file) != before:
+        raise VpnctlError("Xray restarted during statistics read; retry the command")
+    apply_usage_snapshot(state, collect_usage_deltas(stats), before)
+
+
+def apply_usage_snapshot(state: dict[str, Any], counters: dict[str, dict[str, int]], epoch: str) -> None:
+    accounting = state.setdefault("accounting", {"epoch": epoch, "checkpoints": {}})
+    same_epoch = accounting.get("epoch") == epoch
+    checkpoints = accounting.get("checkpoints", {}) if same_epoch else {}
+    deltas = {}
+    for email, traffic in counters.items():
+        previous = checkpoints.get(email, {})
+        deltas[email] = {}
+        for direction, value in traffic.items():
+            if value < 0:
+                raise VpnctlError("negative Xray traffic counter")
+            baseline = int(previous.get(direction, 0))
+            deltas[email][direction] = value - baseline if value >= baseline else value
+        checkpoints[email] = traffic.copy()
+    apply_usage_deltas(state, deltas)
+    state["accounting"] = {"epoch": epoch, "checkpoints": checkpoints}
+
+
+def validate_config(config: dict[str, Any]) -> None:
+    inbounds = [inbound["tag"] for inbound in config["inbounds"]]
+    outbounds = [outbound["tag"] for outbound in config["outbounds"]]
+    if len(set(inbounds)) != len(inbounds) or len(set(outbounds)) != len(outbounds):
+        raise VpnctlError("duplicate Xray tags")
+    for rule in config["routing"]["rules"]:
+        if not set(rule["inboundTag"]).issubset(inbounds):
+            raise VpnctlError("routing references an unknown inbound")
+        if rule["outboundTag"] not in outbounds + [config["api"]["tag"]]:
+            raise VpnctlError("routing references an unknown outbound")
+
+
+def validate_native(compose_file: Path, candidate_path: Path) -> None:
+    run_compose(compose_file, [
+        "run", "--rm", "--no-deps", "-v", f"{candidate_path.resolve()}:/etc/xray/candidate.json:ro",
+        XRAY_SERVICE, "run", "-test", "-config", "/etc/xray/candidate.json",
+    ], capture=True)
+
+
+def verify_xray(compose_file: Path, config: dict[str, Any]) -> None:
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            epoch = runtime_epoch(compose_file)
+            query_xray_stats(compose_file, reset=False, state={})
+            for inbound in config["inbounds"]:
+                with socket.create_connection(("127.0.0.1", inbound["port"]), timeout=1):
+                    pass
+            time.sleep(0.25)
+            if epoch != runtime_epoch(compose_file):
+                raise VpnctlError("Xray restarted during health check")
+            return
+        except (OSError, VpnctlError, subprocess.CalledProcessError):
+            if time.monotonic() >= deadline:
+                raise VpnctlError("Xray failed API/listener health checks") from None
+            time.sleep(0.25)
+
+
+def journal_path(state_path: Path) -> Path:
+    return state_path.with_name(state_path.name + ".deploy")
+
+
+def remove_journal(state_path: Path) -> None:
+    journal_path(state_path).unlink()
+    sync_directory(state_path.parent)
+
+
+def recover_deployment(state_path: Path, config_path: Path, compose_file: Path) -> None:
+    journal = load_json(journal_path(state_path))
+    if journal.get("config_path", str(config_path.resolve())) != str(config_path.resolve()) or \
+            journal.get("compose_file", str(compose_file.resolve())) != str(compose_file.resolve()):
+        raise VpnctlError("Recovery requires the original --config and --compose-file paths")
+    if journal["config"] is None:
+        run_compose(compose_file, ["stop", XRAY_SERVICE], capture=True)
+        config_path.unlink(missing_ok=True)
+    else:
+        write_json(config_path, journal["config"])
+        restart_xray(compose_file)
+        verify_xray(compose_file, journal["config"])
+    write_json(state_path, journal["state"])
+    write_json(backup_path(state_path), journal["state"])
+    remove_journal(state_path)
+
+
+def deploy_config(state: dict[str, Any], state_path: Path, config_path: Path,
+                  compose_file: Path, candidate: dict[str, Any], force: bool = False) -> None:
+    validate_config(candidate)
+    previous_config = load_json(config_path) if config_path.exists() else None
+    if previous_config is not None:
+        os.chmod(config_path, 0o600)
+    if previous_config == candidate and not force:
+        save_state(state_path, state)
+        return
+    candidate_path = config_path.with_name(config_path.name + ".candidate")
+    write_json(candidate_path, candidate)
+    try:
+        validate_native(compose_file, candidate_path)
+    finally:
+        candidate_path.unlink(missing_ok=True)
+    previous_state = load_state(state_path)
+    running = run_compose(compose_file, ["ps", "-q", XRAY_SERVICE], capture=True).stdout.strip()
+    if running:
+        sample_usage(previous_state, compose_file)
+        save_state(state_path, previous_state)
+        accounting = previous_state["accounting"]
+        apply_usage_snapshot(state, accounting["checkpoints"], accounting["epoch"])
+    write_json(journal_path(state_path), {
+        "state": previous_state, "config": previous_config,
+        "config_path": str(config_path.resolve()), "compose_file": str(compose_file.resolve()),
+    })
+    if previous_config is not None:
+        write_json(backup_path(config_path), previous_config)
+    try:
+        write_json(config_path, candidate)
+        restart_xray(compose_file, state)
+        verify_xray(compose_file, candidate)
+        save_state(state_path, state)
+        remove_journal(state_path)
+    except Exception:
+        try:
+            recover_deployment(state_path, config_path, compose_file)
+        except Exception:
+            raise VpnctlError("Deployment and rollback failed; journal retained. Run restart to retry recovery.") from None
+        raise VpnctlError("Deployment failed; previous configuration and state restored.") from None
 
 
 def query_xray_stats(compose_file: Path, reset: bool, state: dict[str, Any]) -> dict[str, Any]:
@@ -1343,17 +1546,15 @@ def command_quota_reset(args: argparse.Namespace) -> None:
 def command_quota_enforce(args: argparse.Namespace) -> None:
     state = load_state(args.state)
     period_changed = ensure_monthly_period(state)
-    stats = query_xray_stats(args.compose_file, reset=True, state=state)
-    changed = False if period_changed else apply_usage_deltas(state, collect_usage_deltas(stats))
+    sample_usage(state, args.compose_file)
     disabled = enforce_quotas(state)
-    if period_changed or changed or disabled:
-        persist_state_and_config(
-            state,
-            args.state,
-            args.config,
-            args.compose_file,
-            restart=(period_changed or bool(disabled)) and not args.no_restart,
-        )
+    persist_state_and_config(
+        state,
+        args.state,
+        args.config,
+        args.compose_file,
+        restart=not args.no_restart,
+    )
     profile_by_client_id = {
         client["id"]: profile
         for profile in all_profiles(state)
@@ -1364,7 +1565,7 @@ def command_quota_enforce(args: argparse.Namespace) -> None:
         profile = profile_by_client_id[client["id"]]
         print(f"Disabled {profile_label(profile)}/{client['name']} after {format_size(used)} used")
     if period_changed:
-        print(f"Monthly quota period rolled over to {state['usage_period']}. Xray counters were reset.")
+        print(f"Monthly quota period rolled over to {state['usage_period']}.")
     if not disabled:
         print("No clients exceeded quota.")
 
@@ -1373,12 +1574,10 @@ def command_usage(args: argparse.Namespace) -> None:
     state = load_state(args.state)
     period_changed = ensure_monthly_period(state)
     if args.refresh:
-        stats = query_xray_stats(args.compose_file, reset=True, state=state)
-        if not period_changed and apply_usage_deltas(state, collect_usage_deltas(stats)):
-            period_changed = True
+        sample_usage(state, args.compose_file)
+        period_changed = True
     if period_changed:
-        save_state(args.state, state)
-        render_and_save_config(state, args.config)
+        persist_state_and_config(state, args.state, args.config)
     profiles = [require_profile(state, args.profile)] if args.profile else all_profiles(state)
     for profile in profiles:
         for client in profile.get("clients", []):
@@ -1404,7 +1603,17 @@ def command_link(args: argparse.Namespace) -> None:
 
 
 def command_compose(args: argparse.Namespace, compose_args: list[str]) -> None:
-    run_compose(args.compose_file, compose_args)
+    if compose_args[0] in {"up", "restart"}:
+        state = load_state(args.state)
+        deploy_config(state, args.state, args.config, args.compose_file, render_config(state), force=True)
+    elif compose_args[0] == "down":
+        state = load_state(args.state)
+        if run_compose(args.compose_file, ["ps", "-q", XRAY_SERVICE], capture=True).stdout.strip():
+            sample_usage(state, args.compose_file)
+            save_state(args.state, state)
+        run_compose(args.compose_file, compose_args)
+    else:
+        run_compose(args.compose_file, compose_args)
 
 
 def add_common_paths(parser: argparse.ArgumentParser) -> None:
@@ -1539,7 +1748,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     usage_parser = subparsers.add_parser("usage", help="Show persisted usage.")
     usage_parser.add_argument("--profile", help="Only show usage for this VPN profile.")
-    usage_parser.add_argument("--refresh", action="store_true", help="Pull and reset current Xray counters before printing.")
+    usage_parser.add_argument("--refresh", action="store_true", help="Read current Xray counters before printing.")
     usage_parser.set_defaults(func=command_usage)
 
     link_parser = subparsers.add_parser("link", help="Print a VLESS link for a client.")
@@ -1574,9 +1783,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.state = args.state.resolve()
+    args.config = args.config.resolve()
+    args.compose_file = args.compose_file.resolve()
     try:
-        args.func(args)
-    except (VpnctlError, subprocess.CalledProcessError, json.JSONDecodeError, OSError) as error:
+        os.environ["XRAY_CONFIG_PATH"] = str(args.config.resolve())
+        if args.command in {"logs", "status"}:
+            args.func(args)
+        else:
+            with state_lock(args.state):
+                if journal_path(args.state).exists():
+                    recover_deployment(args.state, args.config, args.compose_file)
+                args.func(args)
+    except (VpnctlError, subprocess.SubprocessError, json.JSONDecodeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     return 0
