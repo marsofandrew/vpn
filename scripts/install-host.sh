@@ -68,6 +68,7 @@ After=docker.service
 
 [Service]
 Type=oneshot
+UMask=0077
 WorkingDirectory=${REPO_DIR}
 ExecStart=${PYTHON_BIN} ${REPO_DIR}/vpnctl.py quota enforce
 SERVICE
