@@ -1224,10 +1224,16 @@ def deploy_config(state: dict[str, Any], state_path: Path, config_path: Path,
     previous_state = load_state(state_path)
     running = run_compose(compose_file, ["ps", "-q", XRAY_SERVICE], capture=True).stdout.strip()
     if running:
-        sample_usage(previous_state, compose_file)
-        save_state(state_path, previous_state)
-        accounting = previous_state["accounting"]
-        apply_usage_snapshot(state, accounting["checkpoints"], accounting["epoch"])
+        try:
+            sample_usage(previous_state, compose_file)
+        except (VpnctlError, OSError, ValueError, subprocess.SubprocessError):
+            if not force:
+                raise
+            print("Xray statistics unavailable; explicit recovery may lose unobserved traffic.", file=sys.stderr)
+        else:
+            save_state(state_path, previous_state)
+            accounting = previous_state["accounting"]
+            apply_usage_snapshot(state, accounting["checkpoints"], accounting["epoch"])
     write_json(journal_path(state_path), {
         "state": previous_state, "config": previous_config,
         "config_path": str(config_path.resolve()), "compose_file": str(compose_file.resolve()),
@@ -1609,8 +1615,12 @@ def command_compose(args: argparse.Namespace, compose_args: list[str]) -> None:
     elif compose_args[0] == "down":
         state = load_state(args.state)
         if run_compose(args.compose_file, ["ps", "-q", XRAY_SERVICE], capture=True).stdout.strip():
-            sample_usage(state, args.compose_file)
-            save_state(args.state, state)
+            try:
+                sample_usage(state, args.compose_file)
+            except (VpnctlError, OSError, ValueError, subprocess.SubprocessError):
+                print("Xray statistics unavailable; stopping may lose unobserved traffic.", file=sys.stderr)
+            else:
+                save_state(args.state, state)
         run_compose(args.compose_file, compose_args)
     else:
         run_compose(args.compose_file, compose_args)

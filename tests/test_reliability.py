@@ -180,6 +180,18 @@ class ReliabilityTests(unittest.TestCase):
                 self.deploy()
         self.assertTrue(vpnctl.journal_path(self.state_path).exists())
 
+    def test_explicit_restart_can_recover_an_unresponsive_statistics_api(self):
+        self.client()["enabled"] = False
+        with patch.object(vpnctl, "run_compose", return_value=subprocess.CompletedProcess([], 0, stdout="running")), \
+                patch.object(vpnctl, "sample_usage", side_effect=vpnctl.VpnctlError("API unavailable")), \
+                patch.object(vpnctl, "validate_native"), patch.object(vpnctl, "restart_xray") as restart, \
+                patch.object(vpnctl, "verify_xray"):
+            with self.assertRaisesRegex(vpnctl.VpnctlError, "API unavailable"):
+                self.deploy()
+            restart.assert_not_called()
+            self.deploy(force=True)
+            restart.assert_called_once()
+
     def test_interrupted_deployment_is_recovered_before_next_command(self):
         vpnctl.write_json(vpnctl.journal_path(self.state_path), {"state": self.state, "config": self.config})
         vpnctl.write_json(self.config_path, {"interrupted": True})

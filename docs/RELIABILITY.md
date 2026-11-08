@@ -60,7 +60,10 @@ retain checkpoints too, preventing lifetime counters from being recharged.
 Unobserved traffic spanning a calendar boundary is assigned to the first poll's
 month; use frequent polling to limit this ambiguity. Controlled recreation polls
 and commits usage first. Traffic between that poll and stop, or since the last
-poll before an unexpected Xray crash, can be lost. This is not exactly-once
+poll before an unexpected Xray crash, can be lost. Explicit up/restart/down
+also permit recovery when statistics are unavailable, with a warning about
+unobserved traffic; automatic configuration mutations abort on a failed read.
+This is not exactly-once
 accounting across Xray crashes. A restored older state backup may also replay
 or lose observations across epochs. Disabled clients are removed at apply time;
 `--no-restart` deliberately postpones enforcement.
@@ -106,7 +109,9 @@ running container, force recreation, live statistics reads and injected health
 failure rollback. It does not establish a client REALITY session, measure real
 traffic/quota cutoff or establish accessibility from Russian networks.
 
-Local evidence: 28 baseline tests passed. The official GHCR image pull returned
+Local evidence: 28 baseline tests passed; final validation passed 47 unit tests
+and the Docker integration test, Python compilation, shell syntax, Compose
+validation and diff whitespace checks. The official GHCR image pull returned
 403 in this environment; local runtime checks use the same Xray 25.3.6 binary in
 `teddysun/xray:25.3.6` (digest
 `sha256:3e37257dbd81dd07f5b71c13228f4b3f0feec21349531eb48650cfaf8393de91`)
