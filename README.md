@@ -10,6 +10,12 @@ The repo includes:
 
 Generated secrets and runtime config live under `data/` and are ignored by git.
 
+See [architecture](docs/ARCHITECTURE.md) for the v3 state contract and
+[reliability operations](docs/RELIABILITY.md) for atomic backups, recovery,
+accounting limits, image hardening, migration and rollback instructions.
+`render` and `--no-restart` now stage `data/config.json.pending`; apply desired
+state with `restart` or `up`, which validate and recreate the container safely.
+
 ## Quick Start
 
 Run these commands on a fresh Ubuntu/Debian VPS.
