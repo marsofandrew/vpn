@@ -35,6 +35,8 @@ python3 vpnctl.py init \
 
 `init` creates the first direct VPN profile, named `default` unless you pass `--profile NAME`. `--port` controls that profile's public VPN TCP port and Xray inbound port. Omit it to use `443`. If you use a custom port such as `8443`, open that TCP port in `ufw` and in your cloud firewall. `--quota 50GiB` means 50 GiB per calendar month. Usage periods reset on the first day of each UTC month.
 
+`--server-host` must be only the public VPS IP or DNS name, without `https://` and without a port. The client link adds the profile port automatically. `--reality-target` is where values such as `ya.ru:443` or `www.cloudflare.com:443` belong; the generated client link uses that host as `sni`.
+
 Start and validate Xray:
 
 ```bash
@@ -307,6 +309,7 @@ If clients cannot connect:
 
 - confirm the VPS firewall and cloud firewall allow the profile's configured TCP port, default `443`
 - confirm `--server-host` is the public IP or DNS name clients use
+- confirm `--server-host` does not include the REALITY target or a port; a generated link should contain `@YOUR_VPS_IP_OR_DOMAIN:PORT` and `sni=REALITY_TARGET_HOST`
 - confirm the profile's `--reality-target` is reachable from the server
 - for proxy profiles, confirm the upstream VPN link is configured and reachable from this VPS
 - regenerate the client link with `python3 vpnctl.py link CLIENT_NAME --profile PROFILE_NAME`

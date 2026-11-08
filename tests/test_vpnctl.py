@@ -164,6 +164,37 @@ class VpnctlTests(unittest.TestCase):
         self.assertEqual(query["sni"], ["www.cloudflare.com"])
         self.assertEqual(query["flow"], ["xtls-rprx-vision"])
 
+    def test_vless_link_uses_server_host_and_ya_ru_sni(self) -> None:
+        state = vpnctl.create_state(
+            server_host="203.0.113.10",
+            reality_target="ya.ru:443",
+            default_domain="example.com",
+            port=443,
+            client_names=["phone"],
+            quota_bytes=None,
+        )
+        profile = default_profile(state)
+        client = default_client(state)
+
+        link = vpnctl.generate_vless_link(client, state, profile)
+        parsed = urlparse(link)
+        query = parse_qs(parsed.query)
+
+        self.assertEqual(parsed.hostname, "203.0.113.10")
+        self.assertEqual(parsed.port, 443)
+        self.assertEqual(query["sni"], ["ya.ru"])
+
+    def test_server_host_must_not_include_port(self) -> None:
+        with self.assertRaises(vpnctl.VpnctlError):
+            vpnctl.create_state(
+                server_host="ya.ru:443",
+                reality_target="ya.ru:443",
+                default_domain="example.com",
+                port=443,
+                client_names=["phone"],
+                quota_bytes=None,
+            )
+
     def test_custom_port_is_rendered_and_used_in_links(self) -> None:
         state = vpnctl.create_state(
             server_host="203.0.113.10",

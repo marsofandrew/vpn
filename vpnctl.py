@@ -160,6 +160,23 @@ def split_host_port(target: str) -> tuple[str, int | None]:
     return host, int(port)
 
 
+def validate_server_host(host: str | None) -> str:
+    raw = (host or "").strip()
+    if not raw:
+        raise VpnctlError("server host cannot be empty")
+    if "://" in raw:
+        raise VpnctlError("server host must not include a URL scheme")
+    if any(char in raw for char in "/?#@"):
+        raise VpnctlError("server host must be a hostname or IP address only")
+    if raw.startswith("[") or raw.endswith("]"):
+        if not (raw.startswith("[") and raw.endswith("]") and ":" in raw[1:-1]):
+            raise VpnctlError("invalid bracketed IPv6 server host")
+        return raw
+    if ":" in raw:
+        raise VpnctlError("server host must not include a port; profile ports are added to client links")
+    return raw
+
+
 def first_query_value(query: dict[str, list[str]], key: str, default: str | None = None) -> str | None:
     values = query.get(key)
     if not values:
@@ -342,12 +359,13 @@ def create_state(
         profiles = [
             create_profile(profile_name, reality_target, default_domain, profile_port, client_names, quota_bytes, init_mode)
         ]
+    normalized_server_host = validate_server_host(server_host)
     return {
         "version": STATE_VERSION,
         "created_at": now,
         "updated_at": now,
         "usage_period": current_usage_period(),
-        "server_host": server_host,
+        "server_host": normalized_server_host,
         "default_domain": default_domain,
         "fingerprint": DEFAULT_FINGERPRINT,
         "flow": DEFAULT_FLOW,
@@ -587,6 +605,7 @@ def proxy_profiles(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> None:
+    state["server_host"] = validate_server_host(state.get("server_host"))
     profiles = all_profiles(state)
     if not profiles:
         raise VpnctlError("at least one profile is required")
@@ -947,6 +966,7 @@ def require_client(
 
 def generate_vless_link(client: dict[str, Any], state: dict[str, Any], profile: dict[str, Any]) -> str:
     reality_host, _ = split_host_port(profile["reality_target"])
+    server_host = validate_server_host(state["server_host"])
     params = {
         "type": "tcp",
         "encryption": "none",
@@ -960,7 +980,7 @@ def generate_vless_link(client: dict[str, Any], state: dict[str, Any], profile: 
     }
     query = urlencode(params)
     label = quote(f"{profile_label(profile)}:{client['name']}")
-    return f"vless://{client['id']}@{state['server_host']}:{profile['port']}?{query}#{label}"
+    return f"vless://{client['id']}@{server_host}:{profile['port']}?{query}#{label}"
 
 
 def write_qr(link: str, client_name: str, output_dir: Path) -> Path:
