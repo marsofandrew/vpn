@@ -6,6 +6,7 @@ import ipaddress
 import json
 import math
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -23,6 +24,7 @@ import qrcode
 import vpn_transports
 import vpn_health
 import vpn_monitor
+import vpn_subscriptions
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
@@ -480,6 +482,10 @@ def import_upstream_from_outbound(outbound: dict[str, Any]) -> dict[str, Any]:
                       "spx": reality_settings.get("spiderX", "/")})
     elif tls.get("alpn"):
         query["alpn"] = ",".join(tls["alpn"])
+    if tls.get("echConfigList"):
+        if tls.get("echForceQuery", "full") != "full":
+            raise VpnctlError("import requires full ECH query policy")
+        query["ech"] = tls["echConfigList"]
     if network == "xhttp":
         query.update({"path": xhttp.get("path", "/"), "host": xhttp.get("host", ""),
                       "mode": xhttp.get("mode", "stream-one" if security_type == "reality" else "auto")})
@@ -558,6 +564,8 @@ def import_state_from_xray_config(
                 "server_name": tls.get("serverName") or profiles[-1]["reality_target"].split(":")[0],
                 "certificates": tls.get("certificates", []), "alpn": tls.get("alpn", ["h2", "http/1.1"]),
             }}
+            if tls.get("echServerKeys"):
+                profiles[-1]["security"]["settings"]["ech_server_keys"] = tls["echServerKeys"]
         profile_index += 1
 
     if not profiles:
@@ -1147,8 +1155,10 @@ def generate_vless_link(client: dict[str, Any], state: dict[str, Any], profile: 
             "short_id": profile["short_id"], "fingerprint": state.get("fingerprint", DEFAULT_FINGERPRINT),
         }}
         security = {"type": security["type"], "settings": dict(security["settings"])}
-        for field in ("certificates", "private_key", "short_ids", "target"):
+        for field in ("certificates", "private_key", "short_ids", "target", "ech_server_keys"):
             security["settings"].pop(field, None)
+        if profile.get("client_ech_config_list"):
+            security["settings"]["ech_config_list"] = profile["client_ech_config_list"]
         endpoint = {"protocol": "vless", "address": state["server_host"].strip("[]"),
                     "port": profile["port"], "auth": {"id": client["id"], "encryption": "none", "flow": ""},
                     "transport": profile["transport"], "security": security, "enabled": True}
@@ -1291,10 +1301,18 @@ def validate_config(config: dict[str, Any]) -> None:
 
 
 def validate_native(compose_file: Path, candidate_path: Path) -> None:
-    run_compose(compose_file, [
+    completed = run_compose(compose_file, [
         "run", "--rm", "--no-deps", "-v", f"{candidate_path.resolve()}:/etc/xray/candidate.json:ro",
         XRAY_SERVICE, "run", "-test", "-config", "/etc/xray/candidate.json",
     ], capture=True)
+    candidate = load_json(candidate_path)
+    ech_enabled = any(
+        entry.get("streamSettings", {}).get("tlsSettings", {}).get(field)
+        for entry in candidate.get("inbounds", []) + candidate.get("outbounds", [])
+        for field in ("echConfigList", "echServerKeys")
+    )
+    if ech_enabled and not re.match(r"Xray " + re.escape(vpn_transports.PINNED_XRAY_VERSION) + r"\s", completed.stdout):
+        raise VpnctlError("ECH requires the tested pinned Xray version; check XRAY_IMAGE")
 
 
 def verify_xray(compose_file: Path, config: dict[str, Any]) -> None:
@@ -1515,6 +1533,13 @@ def command_profile_add(args: argparse.Namespace) -> None:
             "server_name": args.tls_server_name,
             "certificates": [{"certificateFile": args.certificate, "keyFile": args.certificate_key}],
         }}
+        if args.ech_server_keys_file:
+            if not args.ech_config_list_file:
+                raise VpnctlError("ECH profiles require both server keys and public client config files")
+            profile["security"]["settings"]["ech_server_keys"] = args.ech_server_keys_file.read_text(encoding="utf-8").strip()
+            profile["client_ech_config_list"] = args.ech_config_list_file.read_text(encoding="utf-8").strip()
+    elif args.ech_server_keys_file:
+        raise VpnctlError("ECH server keys require TLS security")
     state["profiles"].append(profile)
     persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
     print(f"Profile added: {profile_label(profile)} on port {profile['port']} outbound={profile_outbound_mode(profile)}")
@@ -1743,6 +1768,41 @@ def command_health(args: argparse.Namespace) -> None:
     for name, policy in state["routing_policies"].items():
         if policy["type"] in {"priority", "balanced"}:
             print(f"policy={name}\tselected={policy.get('current_upstream') or 'block'}")
+
+
+def command_endpoint(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    try:
+        if args.endpoint_command == "add":
+            vpn_subscriptions.add_endpoint(state, args.name, args.client, args.link)
+            save_state(args.state, state)
+        elif args.endpoint_command == "remove":
+            vpn_subscriptions.remove_endpoint(state, args.name)
+            save_state(args.state, state)
+        else:
+            for name, entry in state.get("client_entries", {}).items():
+                endpoint = entry["endpoint"]
+                print(f"{name}\tclient={entry['client']}\taddress={endpoint['address']}"
+                      f"\ttransport={endpoint['transport']['type']}\tsecurity={endpoint['security']['type']}")
+    except ValueError as error:
+        raise VpnctlError(str(error)) from None
+
+
+def command_subscription(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    local_links = [generate_vless_link(client, state, profile)
+                   for profile in all_profiles(state) for client in profile.get("clients", [])
+                   if client["name"] == args.client and client.get("enabled", True)]
+    try:
+        content = vpn_subscriptions.subscription_text(state, args.client, local_links)
+        protected = {args.state.resolve(), args.config.resolve(), args.compose_file.resolve(),
+                     backup_path(args.state).resolve(), journal_path(args.state).resolve()}
+        if args.output.resolve() in protected:
+            raise VpnctlError("subscription output cannot overwrite state or runtime files")
+        vpn_subscriptions.private_write(args.output, content)
+    except ValueError as error:
+        raise VpnctlError(str(error)) from None
+    print(f"Private subscription written to {args.output}")
 
 
 def command_render(args: argparse.Namespace) -> None:
@@ -2040,6 +2100,8 @@ def build_parser() -> argparse.ArgumentParser:
     profile_add_parser.add_argument("--tls-server-name")
     profile_add_parser.add_argument("--certificate")
     profile_add_parser.add_argument("--certificate-key")
+    profile_add_parser.add_argument("--ech-server-keys-file", type=Path)
+    profile_add_parser.add_argument("--ech-config-list-file", type=Path)
     profile_add_parser.add_argument("--client", action="append", help="Initial client name. Repeatable.")
     profile_add_parser.add_argument("--quota", help="Optional initial monthly quota for created clients, for example 50GiB.")
     profile_add_parser.add_argument("--no-restart", action="store_true")
@@ -2118,6 +2180,22 @@ def build_parser() -> argparse.ArgumentParser:
     link_parser.add_argument("--qr", action="store_true", help="Write a QR code PNG.")
     link_parser.add_argument("--output", type=Path, default=Path("qrcodes"), help="QR output directory.")
     link_parser.set_defaults(func=command_link)
+
+    endpoint_parser = subparsers.add_parser("endpoint", help="Manage independent remote client entries.")
+    endpoint_subparsers = endpoint_parser.add_subparsers(dest="endpoint_command", required=True)
+    endpoint_subparsers.add_parser("list").set_defaults(func=command_endpoint)
+    endpoint_add = endpoint_subparsers.add_parser("add")
+    endpoint_add.add_argument("name")
+    endpoint_add.add_argument("--client", required=True)
+    endpoint_add.add_argument("--link", required=True)
+    endpoint_add.set_defaults(func=command_endpoint)
+    endpoint_remove = endpoint_subparsers.add_parser("remove")
+    endpoint_remove.add_argument("name")
+    endpoint_remove.set_defaults(func=command_endpoint)
+    subscription_parser = subparsers.add_parser("subscription", help="Export a private combined subscription file.")
+    subscription_parser.add_argument("client")
+    subscription_parser.add_argument("--output", type=Path, required=True)
+    subscription_parser.set_defaults(func=command_subscription)
 
     up_parser = subparsers.add_parser("up", help="Start Xray.")
     up_parser.set_defaults(func=lambda args: command_compose(args, ["up", "-d"]))

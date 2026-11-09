@@ -19,6 +19,8 @@ The [v4 migration guide](docs/SCHEMA_V4.md) covers named upstreams, route
 assignments and XHTTP profiles; existing TCP/REALITY client links remain valid.
 See [health routing](docs/HEALTH_ROUTING.md) for priority failover, probe setup,
 foreign-only routing and the optional gateway health timer.
+See [CDN and client fallbacks](docs/CDN_CLIENTS.md) for private combined
+subscriptions, independent NY entries and optional ECH on the newer runtime pin.
 
 ## Quick Start
 

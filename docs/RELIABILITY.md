@@ -35,7 +35,8 @@ the desired state. Init/import create the initial config when absent, otherwise
 stage it. State-only changes skip recreation when effective config is unchanged.
 Explicit restart always recreates. Recreation interrupts established connections.
 
-The image is pinned to Xray 25.3.6 for compatibility validation; a version pin is
+PR 1 pinned Xray 25.3.6 for compatibility validation; PR 4 upgrades the default
+to 26.3.27 for optional ECH, with compatibility tests repeated. A version pin is
 not a security audit. `XRAY_IMAGE` overrides require their own validation. Root
 is retained to read mode-0600 host secrets and bind existing low ports without
 changing ownership on deployed hosts. All capabilities are dropped except

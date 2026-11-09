@@ -3,7 +3,11 @@
 Optional pinned native validation:
   XRAY_BINARY=/path/to/xray python3 -m unittest discover -s tests -p test_transports.py
 or XRAY_TRANSPORT_INTEGRATION=1 (Docker, XRAY_TEST_IMAGE defaults to
- teddysun/xray:25.3.6). Native checks assert the version before testing configs.
+ ghcr.io/xtls/xray-core:26.3.27). Override XRAY_TEST_IMAGE with
+teddysun/xray:26.3.27 for the cached alternate image. XRAY_BINARY must also
+be 26.3.27. Native checks
+assert the pinned version before testing configs. Non-ECH variants remain
+compatible with the previous 25.3.6 runtime.
 """
 
 import base64
@@ -22,6 +26,7 @@ import vpn_transports as transports
 CLIENT_ID = "11111111-2222-3333-4444-555555555555"
 PUBLIC_KEY = "pOCSkrZRwni5dyxWn1-puxPZBrRqtoyd-dwrRAn4ogk"
 PRIVATE_KEY = "AAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAUE"
+ECH_CONFIG = base64.b64encode(b"\xfb\xff").decode("ascii")
 
 
 def link(network="tcp", security="reality", **changes):
@@ -317,6 +322,157 @@ class ValidationTests(unittest.TestCase):
                 self.assertNotIn("vless://", str(caught.exception))
 
 
+class ECHTests(unittest.TestCase):
+    def test_explicit_version_capability(self):
+        self.assertEqual(transports.PINNED_XRAY_VERSION, "26.3.27")
+        self.assertIn("PINNED_XRAY_VERSION", transports.__all__)
+
+    def test_static_config_parse_render_and_export(self):
+        for mode in ("auto", "packet-up", "stream-up", "stream-one"):
+            with self.subTest(mode=mode):
+                u = upstream("xhttp", "tls", ech=ECH_CONFIG, mode=mode)
+                settings = u["security"]["settings"]
+                self.assertEqual(settings["ech_config_list"], ECH_CONFIG)
+                self.assertEqual(settings["ech_force_query"], "full")
+                self.assertIs(settings["allow_insecure"], False)
+                native = transports.render_outbound(u, "exit")["streamSettings"]["tlsSettings"]
+                self.assertEqual(native, {"serverName": "example.com", "alpn": ["h2", "http/1.1"],
+                    "allowInsecure": False, "echConfigList": ECH_CONFIG, "echForceQuery": "full"})
+                exported = transports.export_link(u)
+                self.assertIn("ech=%2B%2F8%3D", exported)
+                self.assertNotIn("ech_force_query", exported)
+                self.assertNotIn("echForceQuery", exported)
+                self.assertEqual(transports.parse_link(exported), u)
+
+    def test_https_discovery_roundtrips_without_network(self):
+        for value in ("https://1.1.1.1/dns-query", "https://dns.example.com:8443/dns-query?token=a%2Bb&v=1",
+                      "lookup.example+https://1.1.1.1/dns-query", "lookup.example+https://[2001:db8::1]:443/dns-query"):
+            with self.subTest(value=value):
+                u = upstream("xhttp", "tls", ech=value)
+                original = copy.deepcopy(u)
+                self.assertIsNone(transports.validate_upstream(u))
+                native = transports.render_stream(u["transport"], u["security"])["tlsSettings"]
+                self.assertEqual(native["echConfigList"], value)
+                self.assertEqual(native["echForceQuery"], "full")
+                exported = transports.export_link(u)
+                self.assertEqual(parse_qs(urlsplit(exported).query)["ech"], [value])
+                self.assertEqual(transports.parse_link(exported), u)
+                self.assertEqual(u, original)
+
+    def test_empty_ech_is_omitted_and_legacy_defaults_are_unchanged(self):
+        expected = upstream("xhttp", "tls")
+        self.assertEqual(upstream("xhttp", "tls", ech=""), expected)
+        u = changed(expected, ("security", "settings", "ech_config_list"), "")
+        self.assertEqual(transports.render_outbound(u, "exit"), transports.render_outbound(expected, "exit"))
+        self.assertNotIn("ech=", transports.export_link(u))
+        self.assertEqual(transports.parse_link(transports.export_link(u)), expected)
+        self.assertNotIn("echConfigList", transports.render_outbound(expected, "exit")["streamSettings"]["tlsSettings"])
+
+    def test_force_query_defaults_to_full_and_rejects_weaker_or_orphan_policy(self):
+        u = upstream("xhttp", "tls", ech=ECH_CONFIG)
+        del u["security"]["settings"]["ech_force_query"]
+        self.assertEqual(transports.render_outbound(u, "exit")["streamSettings"]["tlsSettings"]["echForceQuery"], "full")
+        for value in ("", "none", "half", "FULL", None, True, [], {}):
+            with self.subTest(policy=value):
+                bad = changed(u, ("security", "settings", "ech_force_query"), value)
+                with self.assertRaises(ValueError):
+                    transports.validate_upstream(bad)
+                with self.assertRaises(ValueError):
+                    transports.render_stream(bad["transport"], bad["security"])
+                with self.assertRaises(ValueError):
+                    transports.export_link(bad)
+        for config in (None, ""):
+            bad = upstream("xhttp", "tls")
+            if config is not None:
+                bad["security"]["settings"]["ech_config_list"] = config
+            bad["security"]["settings"]["ech_force_query"] = "full"
+            with self.assertRaises(ValueError):
+                transports.validate_upstream(bad)
+
+    def test_rejects_invalid_base64_and_discovery(self):
+        invalid = [None, [], {}, True, 123, " ", "+/8", "+/8==", "-_8=", "+/9=", "=", "!!!!", "éééé",
+                   "http://dns.example/dns-query", "udp://1.1.1.1", "h2c://dns.example/dns-query",
+                   "https://", "https:///dns-query", "https://user:password@dns.example/dns-query",
+                   "https://dns.example:0/dns-query", "https://dns.example:65536/dns-query", "https://dns.example:/dns-query",
+                   "https://[::1]junk/dns-query", "https://dns.example/dns-query#frag", "https://dns.example/dns-query#",
+                   "https://dns.example/a/../dns-query", "https://dns.example/%0d%0a", "https://dns.example/%GG",
+                   "https://dns.example/dns-query?token=%FF", "https://dns.example/dns-query?token=%0a",
+                   "https://dns.example/dns-query?token=a+b", "https://dns.example\\evil/dns-query",
+                   "https://dns.example/white space", "https://dns.example/dns-query\n",
+                   "+https://1.1.1.1/dns-query", "127.0.0.1+https://1.1.1.1/dns-query",
+                   "lookup.example:443+https://1.1.1.1/dns-query", "a+b+https://1.1.1.1/dns-query",
+                   "lookup.example+http://1.1.1.1/dns-query", "lookup.example+https://1.1.1.1/dns-query?x=a+b"]
+        for value in invalid:
+            with self.subTest(value=value):
+                bad = changed(upstream("xhttp", "tls"), ("security", "settings", "ech_config_list"), value)
+                with self.assertRaises(ValueError):
+                    transports.validate_upstream(bad)
+                if isinstance(value, str):
+                    with self.assertRaises(ValueError):
+                        upstream("xhttp", "tls", ech=value)
+
+    def test_server_keys_render_and_never_enter_client_links(self):
+        security = server_security("tls")
+        security["settings"]["ech_server_keys"] = ECH_CONFIG
+        original = copy.deepcopy(security)
+        native = transports.render_stream({"type": "xhttp"}, security, server=True)["tlsSettings"]
+        self.assertEqual(native["echServerKeys"], ECH_CONFIG)
+        self.assertNotIn("echConfigList", native)
+        self.assertNotIn("echForceQuery", native)
+        self.assertEqual(security, original)
+        for value in ("", None, [], "+/8", "-_8=", "https://dns.example/dns-query"):
+            bad = copy.deepcopy(security)
+            bad["settings"]["ech_server_keys"] = value
+            with self.subTest(keys=value):
+                with self.assertRaises(ValueError):
+                    transports.render_stream({"type": "xhttp"}, bad, server=True)
+
+    def test_reality_and_wrong_side_and_sockopt_are_rejected(self):
+        for server in (False, True):
+            security = server_security() if server else upstream("xhttp")["security"]
+            for field in ("ech_config_list", "ech_force_query", "ech_server_keys", "ech_sockopt", "echSockopt"):
+                bad = copy.deepcopy(security)
+                bad["settings"][field] = ECH_CONFIG
+                with self.subTest(server=server, field=field):
+                    with self.assertRaises(ValueError):
+                        transports.render_stream({"type": "xhttp"}, bad, server=server)
+        for value in (ECH_CONFIG, ""):
+            with self.assertRaises(ValueError):
+                upstream("xhttp", "reality", ech=value)
+        for field in ("ech_server_keys", "ech_sockopt", "echSockopt", "echConfigList"):
+            bad = changed(upstream("xhttp", "tls"), ("security", "settings", field), ECH_CONFIG)
+            with self.assertRaises(ValueError):
+                transports.validate_upstream(bad)
+        for field in ("ech_config_list", "ech_force_query", "ech_sockopt", "echSockopt"):
+            bad = server_security("tls")
+            bad["settings"][field] = ECH_CONFIG
+            with self.assertRaises(ValueError):
+                transports.render_stream({"type": "xhttp"}, bad, True)
+
+    def test_duplicate_and_unstandardized_uri_parameters_are_rejected(self):
+        for suffix in ("&ech=", "&ech=" + quote(ECH_CONFIG, safe=""), "&echForceQuery=full",
+                       "&ech_force_query=full", "&echServerKeys=secret", "&echSockopt=%7B%7D", "&echConfigList=secret"):
+            with self.subTest(suffix=suffix):
+                with self.assertRaises(ValueError):
+                    transports.parse_link(link("xhttp", "tls", ech=ECH_CONFIG) + suffix)
+        with self.assertRaises(ValueError):
+            transports.parse_link(link("xhttp", "tls", ech=ECH_CONFIG).replace("%2B", "+"))
+
+    def test_errors_do_not_expose_ech_material_or_discovery_credentials(self):
+        for value in ("SECRET-ECH-KEY", "https://secret:password@dns.example/dns-query", "secret.example+https://"):
+            with self.subTest(value=value):
+                bad = changed(upstream("xhttp", "tls"), ("security", "settings", "ech_config_list"), value)
+                with self.assertRaises(ValueError) as caught:
+                    transports.validate_upstream(bad)
+                self.assertNotIn(value, str(caught.exception))
+                self.assertNotIn("secret", str(caught.exception).lower())
+                security = server_security("tls")
+                security["settings"]["ech_server_keys"] = value
+                with self.assertRaises(ValueError) as caught:
+                    transports.render_stream({"type": "xhttp"}, security, True)
+                self.assertNotIn(value, str(caught.exception))
+
+
 class ServerTests(unittest.TestCase):
     def test_reality_inbound_native_shape(self):
         for network in ("tcp", "xhttp"):
@@ -375,7 +531,7 @@ class ServerTests(unittest.TestCase):
                 transports.render_stream({"type": "xhttp"}, security, True)
         for security in (server_security(), server_security("tls")):
             with self.assertRaises(ValueError):
-                transports.render_stream({"type": "xhttp"}, security)  # server fields cannot enter client configs
+                transports.render_stream({"type": "xhttp"}, security)
         with self.assertRaises(ValueError):
             transports.render_stream({"type": "tcp"}, server_security("tls"), True)
         with self.assertRaises(ValueError):
@@ -392,9 +548,9 @@ class NativeTests(unittest.TestCase):
         binary = os.environ.get("XRAY_BINARY")
         self.runtime_root = str(self.root) if binary else "/work"
         self.command = [binary] if binary else ["docker", "run", "--rm", "-i", "--network", "none", "--entrypoint", "xray",
-            "-v", str(self.root) + ":/work:ro", os.environ.get("XRAY_TEST_IMAGE", "teddysun/xray:25.3.6")]
+            "-v", str(self.root) + ":/work:ro", os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.3.27")]
         version = self.native("version")
-        self.assertRegex(version, r"\AXray 25\.3\.6 \(")
+        self.assertRegex(version, r"\AXray 26\.3\.27 \(")
 
     def native(self, *args, config=None):
         result = subprocess.run(self.command + list(args), input=json.dumps(config) if config is not None else None,
@@ -431,6 +587,28 @@ class NativeTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 outbound["streamSettings"]["xhttpSettings"]["mode"] = mode
                 self.validate({"outbounds": [outbound]})
+
+    def test_native_generated_ech_client_server_and_https_discovery(self):
+        material = self.native("tls", "ech", "-serverName", "outer.example").splitlines()
+        config = material[material.index("ECH config list: ") + 1]
+        keys = material[material.index("ECH server keys: ") + 1]
+        self.assertTrue(config)
+        self.assertTrue(keys)
+        certificate = json.loads(self.native("tls", "cert", "-domain", "example.com"))
+        for field, name in (("certificate", "cert.pem"), ("key", "key.pem")):
+            (self.root / name).write_text("\n".join(certificate[field]) + "\n")
+        security = server_security("tls")
+        security["settings"].update(ech_server_keys=keys, certificates=[{
+            "certificateFile": self.runtime_root + "/cert.pem", "keyFile": self.runtime_root + "/key.pem"}])
+        streams = [transports.render_stream({"type": "xhttp", "settings": {"mode": mode}}, security, True)
+                   for mode in ("auto", "packet-up", "stream-up", "stream-one")]
+        outbounds = [transports.render_outbound(upstream("xhttp", "tls", ech=value), "ech-" + str(index))
+                     for index, value in enumerate((config, "https://1.1.1.1/dns-query", "lookup.example+https://1.1.1.1/dns-query"))]
+        self.validate({"inbounds": [{"listen": "127.0.0.1", "port": 21000 + index, "protocol": "vless",
+            "settings": {"clients": [{"id": CLIENT_ID}], "decryption": "none"}, "streamSettings": stream}
+            for index, stream in enumerate(streams)], "outbounds": outbounds})
+        parsed = upstream("xhttp", "tls", ech=config)
+        self.assertEqual(transports.parse_link(transports.export_link(parsed)), parsed)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
-"""Opt-in Xray 25.3.6 syntax checks; these do not start a live server.
+"""Opt-in pinned Xray syntax checks; these do not start a live server.
 
 Run with XRAY_INTEGRATION=1 python3 -m unittest discover -s tests \
     -p test_native_transports.py -v
-Set XRAY_TEST_IMAGE=teddysun/xray:25.3.6 to use the alternate image.
+Set XRAY_TEST_IMAGE to use an alternate image.
 """
 
 import base64
@@ -32,7 +32,7 @@ class NativeTransportTests(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import rsa, x25519
         from cryptography.x509.oid import NameOID
 
-        cls.image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:25.3.6")
+        cls.image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.3.27")
         temporary = tempfile.TemporaryDirectory(prefix="vpn-native-transports-")
         cls.addClassCleanup(temporary.cleanup)
         cls.root = Path(temporary.name).resolve()
@@ -106,7 +106,7 @@ class NativeTransportTests(unittest.TestCase):
             result.returncode, 0,
             f"{label} rejected by {self.image}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
         )
-        self.assertIn("Xray 25.3.6", result.stdout + result.stderr,
+        self.assertIn("Xray " + self.transports.PINNED_XRAY_VERSION, result.stdout + result.stderr,
                       "XRAY_TEST_IMAGE must provide the requested Xray version")
         self.assertIn("Configuration OK", result.stdout + result.stderr)
 
