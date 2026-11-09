@@ -11,9 +11,10 @@ from urllib.parse import parse_qs, urlparse
 import vpnctl
 
 
+SAMPLE_PUBLIC_KEY = vpnctl.generate_reality_keys()["public_key"]
 SAMPLE_UPSTREAM_LINK = (
     "vless://11111111-2222-3333-4444-555555555555@upstream.example.com:8443"
-    "?type=tcp&encryption=none&security=reality&pbk=upstreamPublicKey"
+    f"?type=tcp&encryption=none&security=reality&pbk={SAMPLE_PUBLIC_KEY}"
     "&fp=chrome&sni=www.cloudflare.com&sid=abc123&spx=%2F&flow=xtls-rprx-vision#upstream"
 )
 
@@ -67,7 +68,7 @@ class VpnctlTests(unittest.TestCase):
         self.assertEqual(upstream["host"], "upstream.example.com")
         self.assertEqual(upstream["port"], 8443)
         self.assertEqual(upstream["id"], "11111111-2222-3333-4444-555555555555")
-        self.assertEqual(upstream["public_key"], "upstreamPublicKey")
+        self.assertEqual(upstream["public_key"], SAMPLE_PUBLIC_KEY)
         self.assertEqual(upstream["server_name"], "www.cloudflare.com")
         self.assertEqual(upstream["short_id"], "abc123")
 
@@ -450,14 +451,15 @@ class VpnctlTests(unittest.TestCase):
             quota_bytes=None,
         )
         state["version"] = 2
-        state.pop("upstream")
+        state.pop("upstreams")
+        state["upstream"] = None
         for profile in state["profiles"]:
             profile.pop("outbound_mode")
 
         migrated = vpnctl.migrate_legacy_state(state)
 
         self.assertEqual(migrated["version"], vpnctl.STATE_VERSION)
-        self.assertIsNone(migrated["upstream"])
+        self.assertEqual(migrated["upstreams"], {})
         self.assertEqual([profile["outbound_mode"] for profile in migrated["profiles"]], ["direct"])
 
     def test_import_state_from_xray_config_round_trips_both_modes(self) -> None:
@@ -479,7 +481,7 @@ class VpnctlTests(unittest.TestCase):
         self.assertEqual(imported["server_host"], "imported.example.com")
         self.assertEqual([profile["name"] for profile in imported["profiles"]], ["direct", "proxy"])
         self.assertEqual([profile["outbound_mode"] for profile in imported["profiles"]], ["direct", "proxy"])
-        self.assertEqual(imported["upstream"]["host"], "upstream.example.com")
+        self.assertEqual(imported["upstreams"][vpnctl.UPSTREAM_OUTBOUND_TAG]["address"], "upstream.example.com")
         self.assertEqual(imported["profiles"][0]["keys"]["public_key"], original["profiles"][0]["keys"]["public_key"])
         self.assertEqual(imported_config["routing"]["rules"][1]["outboundTag"], "direct")
         self.assertEqual(imported_config["routing"]["rules"][2]["outboundTag"], vpnctl.UPSTREAM_OUTBOUND_TAG)
@@ -497,7 +499,7 @@ class VpnctlTests(unittest.TestCase):
 
         imported = vpnctl.import_state_from_xray_config(config, "imported.example.com")
 
-        self.assertIsNone(imported["upstream"])
+        self.assertEqual(imported["upstreams"], {})
         self.assertEqual(default_profile(imported)["outbound_mode"], "direct")
         self.assertEqual(default_profile(imported)["keys"]["public_key"], default_profile(original)["keys"]["public_key"])
 

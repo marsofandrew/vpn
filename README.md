@@ -15,6 +15,8 @@ See [architecture](docs/ARCHITECTURE.md) for the v3 state contract and
 accounting limits, image hardening, migration and rollback instructions.
 `render` and `--no-restart` now stage `data/config.json.pending`; apply desired
 state with `restart` or `up`, which validate and recreate the container safely.
+The [v4 migration guide](docs/SCHEMA_V4.md) covers named upstreams, route
+assignments and XHTTP profiles; existing TCP/REALITY client links remain valid.
 
 ## Quick Start
 

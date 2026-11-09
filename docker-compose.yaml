@@ -14,4 +14,5 @@ services:
       - NET_BIND_SERVICE
     volumes:
       - ${XRAY_CONFIG_PATH:-./data/config.json}:/etc/xray/config.json:ro
+      - ${XRAY_CERT_DIR:-./certificates}:/etc/xray/certificates:ro
     command: ["run", "-config", "/etc/xray/config.json"]

@@ -8,3 +8,4 @@ vpn_config.json
 config.json
 .env
 .idea/
+certificates/
