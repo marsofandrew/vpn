@@ -25,6 +25,7 @@ import vpn_transports
 import vpn_health
 import vpn_monitor
 import vpn_subscriptions
+import vpn_inventory
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
@@ -668,6 +669,8 @@ def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> N
             vpn_transports.validate_upstream(upstream)
         except ValueError as error:
             raise VpnctlError(str(error)) from None
+    if any(name not in state["upstreams"] for name in state.get("upstream_nodes", {})):
+        raise VpnctlError("node binding references an unknown upstream")
     for name, policy in state["routing_policies"].items():
         validate_stable_name(name)
         if policy["type"] not in {"direct", "upstream", "block", "balanced", "priority"}:
@@ -1650,6 +1653,7 @@ def command_upstream_clear(args: argparse.Namespace) -> None:
            for policy_name, policy in state["routing_policies"].items()):
         raise VpnctlError("cannot remove an assigned upstream")
     state["upstreams"].pop(name, None)
+    state.setdefault("upstream_nodes", {}).pop(name, None)
     state["routing_policies"] = {key: policy for key, policy in state["routing_policies"].items()
                                  if name not in policy.get("upstreams", [])}
     persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
@@ -1803,6 +1807,50 @@ def command_subscription(args: argparse.Namespace) -> None:
     except ValueError as error:
         raise VpnctlError(str(error)) from None
     print(f"Private subscription written to {args.output}")
+
+
+def command_inventory(args: argparse.Namespace) -> None:
+    try:
+        if args.inventory_command == "example":
+            if args.file.exists():
+                raise VpnctlError("inventory already exists; choose a new file")
+            write_json(args.file, vpn_inventory.example_inventory())
+            print(f"Inventory example written to {args.file}")
+            return
+        inventory = load_json(args.file)
+        vpn_inventory.validate_inventory(inventory)
+        if args.inventory_command == "validate" and args.with_runtime:
+            state = load_state(args.state)
+            vpn_inventory.validate_node_references(inventory, [state["node"]["id"], *state.get("upstream_nodes", {}).values()])
+            nodes = {node["id"]: node for node in inventory["nodes"]}
+            if nodes[state["node"]["id"]]["role"] not in {state["node"]["role"], "both"}:
+                raise VpnctlError("local runtime role does not match inventory")
+            if any(nodes[node_id]["role"] not in {"exit", "both"} for node_id in state.get("upstream_nodes", {}).values()):
+                raise VpnctlError("upstream bindings must reference exit-capable nodes")
+        if args.inventory_command == "list":
+            for node in vpn_inventory.summary_nodes(inventory):
+                print(f"{node['id']}\trole={node['role']}\tconnectivity={node['mode']}\thost={node['host'] or '-'}")
+        else:
+            print("Inventory is valid.")
+    except ValueError as error:
+        raise VpnctlError(str(error)) from None
+
+
+def command_upstream_bind(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    if args.name not in state["upstreams"]:
+        raise VpnctlError("unknown upstream")
+    try:
+        inventory = load_json(args.inventory)
+        vpn_inventory.validate_node_references(inventory, [args.node])
+        node = next(node for node in inventory["nodes"] if node["id"] == args.node)
+        if node["role"] not in {"exit", "both"}:
+            raise VpnctlError("upstream node must support exit traffic")
+    except ValueError as error:
+        raise VpnctlError(str(error)) from None
+    state.setdefault("upstream_nodes", {})[args.name] = args.node
+    save_state(args.state, state)
+    print(f"Bound upstream {args.name} to inventory node {args.node}")
 
 
 def command_render(args: argparse.Namespace) -> None:
@@ -2023,6 +2071,11 @@ def build_parser() -> argparse.ArgumentParser:
     upstream_clear_parser.set_defaults(func=command_upstream_clear)
     upstream_list_parser = upstream_subparsers.add_parser("list", help="List named upstreams.")
     upstream_list_parser.set_defaults(func=command_upstream_list)
+    upstream_bind = upstream_subparsers.add_parser("bind", help="Associate an upstream with inventory metadata.")
+    upstream_bind.add_argument("name")
+    upstream_bind.add_argument("--node", required=True)
+    upstream_bind.add_argument("--inventory", type=Path, required=True)
+    upstream_bind.set_defaults(func=command_upstream_bind)
     for operation in ("add", "remove", "enable", "disable"):
         operation_parser = upstream_subparsers.add_parser(operation)
         operation_parser.add_argument("name")
@@ -2197,6 +2250,15 @@ def build_parser() -> argparse.ArgumentParser:
     subscription_parser.add_argument("--output", type=Path, required=True)
     subscription_parser.set_defaults(func=command_subscription)
 
+    inventory_parser = subparsers.add_parser("inventory", help="Manage separate infrastructure metadata.")
+    inventory_subparsers = inventory_parser.add_subparsers(dest="inventory_command", required=True)
+    for operation in ("example", "validate", "list"):
+        operation_parser = inventory_subparsers.add_parser(operation)
+        operation_parser.add_argument("--file", type=Path, default=Path("data/inventory.json"))
+        if operation == "validate":
+            operation_parser.add_argument("--with-runtime", action="store_true")
+        operation_parser.set_defaults(func=command_inventory)
+
     up_parser = subparsers.add_parser("up", help="Start Xray.")
     up_parser.set_defaults(func=lambda args: command_compose(args, ["up", "-d"]))
     down_parser = subparsers.add_parser("down", help="Stop Xray.")
@@ -2227,7 +2289,7 @@ def main(argv: list[str] | None = None) -> int:
     args.compose_file = args.compose_file.resolve()
     try:
         os.environ["XRAY_CONFIG_PATH"] = str(args.config.resolve())
-        if args.command in {"logs", "status"}:
+        if args.command in {"logs", "status"} or (args.command == "inventory" and not getattr(args, "with_runtime", False)):
             args.func(args)
         else:
             with state_lock(args.state):

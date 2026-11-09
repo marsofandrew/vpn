@@ -21,6 +21,8 @@ See [health routing](docs/HEALTH_ROUTING.md) for priority failover, probe setup,
 foreign-only routing and the optional gateway health timer.
 See [CDN and client fallbacks](docs/CDN_CLIENTS.md) for private combined
 subscriptions, independent NY entries and optional ECH on the newer runtime pin.
+The [separate node inventory](docs/INVENTORY.md) records gateway/exit roles and
+future CGNAT hosts without provisioning or changing running routes.
 
 ## Quick Start
 
