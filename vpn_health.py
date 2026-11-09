@@ -62,6 +62,7 @@ import socket
 import ssl
 import time
 from contextlib import ExitStack
+from typing import Any
 from urllib.parse import urlsplit
 
 __all__ = ["select_route", "record_probe", "probe_path"]
@@ -71,16 +72,36 @@ _MAX_BODY = 16 * 1024 * 1024
 _MAX_JSON = 16 * 1024
 _WIRE_OVERHEAD = 64 * 1024
 _METRICS = ("latency_ms", "download_time_ms", "total_time_ms", "throughput_bps")
-_ERROR_CODES = frozenset({
-    "invalid_configuration", "expected_exit_ips_required", "egress_url_required",
-    "timeout", "connection_failed", "socks_protocol", "socks_authentication",
-    "socks_connect_failed", "tls_verification_failed", "tls_failed",
-    "invalid_http", "http_status", "egress_http_status", "unsupported_encoding",
-    "response_too_large", "body_too_short", "invalid_egress_response",
-    "exit_ip_mismatch", "probe_failed",
-    "compose_config_failed", "host_network_required", "invalid_upstream",
-    "probe_setup_failed", "probe_start_failed", "probe_start_timeout", "probe_cleanup_failed",
-})
+_ERROR_CODES = frozenset(
+    {
+        "invalid_configuration",
+        "expected_exit_ips_required",
+        "egress_url_required",
+        "timeout",
+        "connection_failed",
+        "socks_protocol",
+        "socks_authentication",
+        "socks_connect_failed",
+        "tls_verification_failed",
+        "tls_failed",
+        "invalid_http",
+        "http_status",
+        "egress_http_status",
+        "unsupported_encoding",
+        "response_too_large",
+        "body_too_short",
+        "invalid_egress_response",
+        "exit_ip_mismatch",
+        "probe_failed",
+        "compose_config_failed",
+        "host_network_required",
+        "invalid_upstream",
+        "probe_setup_failed",
+        "probe_start_failed",
+        "probe_start_timeout",
+        "probe_cleanup_failed",
+    }
+)
 
 
 def _number(value, name, minimum=None):
@@ -110,28 +131,37 @@ def select_route(policy: dict, upstreams: dict, health: dict, now: float) -> str
     if kind not in ("upstream", "priority", "balanced"):
         raise ValueError("unsupported policy type")
     members = policy.get("upstreams", [])
-    if (not isinstance(members, list) or any(not isinstance(x, str) for x in members)
-            or len(set(members)) != len(members)
-            or (kind == "upstream" and len(members) != 1)):
+    if (
+        not isinstance(members, list)
+        or any(not isinstance(x, str) for x in members)
+        or len(set(members)) != len(members)
+        or (kind == "upstream" and len(members) != 1)
+    ):
         raise ValueError("invalid policy upstreams")
-    candidates = [uid for uid in members if uid in upstreams
-                  and upstreams[uid].get("enabled", True)
-                  and health.get(uid, {}).get("status") == "healthy"]
+    candidates = [
+        uid
+        for uid in members
+        if uid in upstreams
+        and upstreams[uid].get("enabled", True)
+        and health.get(uid, {}).get("status") == "healthy"
+    ]
     if not candidates:
         return None
     if kind == "balanced":
+
         def latency(uid):
             value = health[uid].get("latency_ms")
             try:
                 return _number(value, "latency_ms", 0)
             except ValueError:
                 return math.inf
+
         return min(candidates, key=latency)
     if kind == "priority":
         cooldown = _number(policy.get("cooldown", 60), "cooldown", 0)
         current = policy.get("current_upstream")
         if current in candidates:
-            for uid in candidates[:candidates.index(current)]:
+            for uid in candidates[: candidates.index(current)]:
                 restored = health[uid].get("restored_at")
                 if cooldown == 0:
                     return uid
@@ -149,29 +179,48 @@ def record_probe(previous: dict, result: dict, now: float, config: dict) -> dict
     interval = _number(config.get("interval", 30), "interval", 0)
     _number(config.get("cooldown", 60), "cooldown", 0)
     fail_threshold = _integer(config.get("fail_threshold", 3), "fail_threshold")
-    success_threshold = _integer(config.get("success_threshold", 3), "success_threshold")
-    if previous.get("last_probe") is not None and now < _number(previous["last_probe"], "last_probe"):
+    success_threshold = _integer(
+        config.get("success_threshold", 3), "success_threshold"
+    )
+    if previous.get("last_probe") is not None and now < _number(
+        previous["last_probe"], "last_probe"
+    ):
         raise ValueError("out of order probe")
     status = previous.get("status", "unknown")
     if status not in ("unknown", "healthy", "unhealthy"):
         raise ValueError("invalid health status")
     success = result.get("success") is True
-    failures = 0 if success else _integer(previous.get("consecutive_failures", 0), "failures", 0) + 1
-    successes = _integer(previous.get("consecutive_successes", 0), "successes", 0) + 1 if success else 0
+    failures = (
+        0
+        if success
+        else _integer(previous.get("consecutive_failures", 0), "failures", 0) + 1
+    )
+    successes = (
+        _integer(previous.get("consecutive_successes", 0), "successes", 0) + 1
+        if success
+        else 0
+    )
     restored_at = previous.get("restored_at")
     if success and successes >= success_threshold and status != "healthy":
         status, restored_at = "healthy", now
     elif not success and failures >= fail_threshold:
         status, restored_at = "unhealthy", None
     state = {
-        "status": status, "success": success,
-        "consecutive_failures": failures, "consecutive_successes": successes,
-        "last_probe": now, "next_probe_at": _number(now + interval, "next_probe_at"),
+        "status": status,
+        "success": success,
+        "consecutive_failures": failures,
+        "consecutive_successes": successes,
+        "last_probe": now,
+        "next_probe_at": _number(now + interval, "next_probe_at"),
         "last_success": now if success else previous.get("last_success"),
         "restored_at": restored_at,
-        "error": None if success else (
-            result.get("error") if isinstance(result.get("error"), str)
-            and result["error"] in _ERROR_CODES else "probe_failed"),
+        "error": None
+        if success
+        else (
+            result.get("error")
+            if isinstance(result.get("error"), str) and result["error"] in _ERROR_CODES
+            else "probe_failed"
+        ),
         "exit_ip_verified": result.get("exit_ip_verified") is True,
     }
     for key in _METRICS:
@@ -181,8 +230,11 @@ def record_probe(previous: dict, result: dict, now: float, config: dict) -> dict
             state[key] = None
     for key in ("status_code", "egress_status_code", "body_bytes"):
         value = result.get(key)
-        valid = isinstance(value, int) and not isinstance(value, bool)
-        valid = valid and (value >= 0 if key == "body_bytes" else 100 <= value <= 599)
+        valid = (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and (value >= 0 if key == "body_bytes" else 100 <= value <= 599)
+        )
         state[key] = value if valid else (0 if key == "body_bytes" else None)
     return state
 
@@ -217,12 +269,20 @@ def _send(sock, data, deadline):
 
 
 def _url(value):
-    if (not isinstance(value, str) or len(value) > 8192
-            or any(ord(c) <= 32 or ord(c) == 127 for c in value)):
+    if (
+        not isinstance(value, str)
+        or len(value) > 8192
+        or any(ord(c) <= 32 or ord(c) == 127 for c in value)
+    ):
         raise ValueError("invalid URL")
     parsed = urlsplit(value)
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
-            or parsed.password is not None or "#" in value):
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or "#" in value
+    ):
         raise ValueError("invalid URL")
     host = parsed.hostname.encode("idna").decode("ascii")
     if "%" in host:
@@ -234,9 +294,14 @@ def _url(value):
         address = ipaddress.ip_address(host)
     except ValueError:
         labels = host.rstrip(".").split(".")
-        if (len(host) > 253 or any(not label or len(label) > 63
-                or not label[0].isalnum() or not label[-1].isalnum()
-                or any(not (c.isalnum() or c == "-") for c in label) for label in labels)):
+        if len(host) > 253 or any(
+            not label
+            or len(label) > 63
+            or not label[0].isalnum()
+            or not label[-1].isalnum()
+            or any(not (c.isalnum() or c == "-") for c in label)
+            for label in labels
+        ):
             raise ValueError("invalid host")
         encoded = host.encode("ascii")
         destination = b"\x03" + bytes([len(encoded)]) + encoded
@@ -247,8 +312,13 @@ def _url(value):
     if port != 443:
         authority += ":" + str(port)
     target = (parsed.path or "/") + ("?" + parsed.query if parsed.query else "")
-    request = ("GET " + target + " HTTP/1.1\r\nHost: " + authority
-               + "\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n").encode("ascii")
+    request = (
+        "GET "
+        + target
+        + " HTTP/1.1\r\nHost: "
+        + authority
+        + "\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n"
+    ).encode("ascii")
     return host, destination + port.to_bytes(2, "big"), request
 
 
@@ -275,7 +345,7 @@ class _WireReader(io.RawIOBase):
         self.received += len(data)
         if self.received > self.limit:
             raise _ProbeError("response_too_large")
-        buffer[:len(data)] = data
+        buffer[: len(data)] = data
         return len(data)
 
     def makefile(self, mode):
@@ -312,7 +382,9 @@ def _response(stack, proxy, destination, context, deadline, max_body):
         raise _ProbeError("socks_protocol")
     _recv_exact(raw, length + 2, deadline)
     raw.settimeout(_remaining(deadline))
-    tls = stack.enter_context(context.wrap_socket(raw, server_hostname=host, do_handshake_on_connect=False))
+    tls = stack.enter_context(
+        context.wrap_socket(raw, server_hostname=host, do_handshake_on_connect=False)
+    )
     tls.settimeout(_remaining(deadline))
     tls.do_handshake()
     _send(tls, request, deadline)
@@ -322,22 +394,43 @@ def _response(stack, proxy, destination, context, deadline, max_body):
     wire.limit = max_body + _WIRE_OVERHEAD
     lengths = response.headers.get_all("Content-Length", [])
     transfer = response.headers.get_all("Transfer-Encoding", [])
-    if (len(lengths) > 1 or (lengths and (not lengths[0].isascii() or not lengths[0].isdecimal()))
-            or (transfer and (len(transfer) != 1 or transfer[0].lower() != "chunked" or lengths))):
+    if (
+        len(lengths) > 1
+        or (lengths and (not lengths[0].isascii() or not lengths[0].isdecimal()))
+        or (
+            transfer
+            and (len(transfer) != 1 or transfer[0].lower() != "chunked" or lengths)
+        )
+    ):
         raise _ProbeError("invalid_http")
     if response.getheader("Content-Encoding", "identity").lower() != "identity":
         raise _ProbeError("unsupported_encoding")
     return response, wire
 
 
-def probe_path(socks_host, socks_port, download_url, egress_url, expected_exit_ips,
-               bytes_required=131072, timeout=15) -> dict:
+def probe_path(
+    socks_host,
+    socks_port,
+    download_url,
+    egress_url,
+    expected_exit_ips,
+    bytes_required=131072,
+    timeout=15,
+) -> dict:
     """Probe only through the supplied local SOCKS route; errors are fixed codes."""
     started = time.monotonic()
-    result = {"success": False, "error": None, "status_code": None,
-              "egress_status_code": None, "latency_ms": None, "body_bytes": 0,
-              "download_time_ms": None, "total_time_ms": None,
-              "throughput_bps": None, "exit_ip_verified": False}
+    result: dict[str, Any] = {
+        "success": False,
+        "error": None,
+        "status_code": None,
+        "egress_status_code": None,
+        "latency_ms": None,
+        "body_bytes": 0,
+        "download_time_ms": None,
+        "total_time_ms": None,
+        "throughput_bps": None,
+        "exit_ip_verified": False,
+    }
     try:
         timeout = _number(timeout, "timeout", 0)
         if timeout == 0:
@@ -349,10 +442,15 @@ def probe_path(socks_host, socks_port, download_url, egress_url, expected_exit_i
         _integer(socks_port, "socks_port")
         if socks_port > 65535 or not isinstance(socks_host, str) or "%" in socks_host:
             raise ValueError("invalid proxy")
-        local = ipaddress.ip_address("127.0.0.1" if socks_host == "localhost" else socks_host)
+        local = ipaddress.ip_address(
+            "127.0.0.1" if socks_host == "localhost" else socks_host
+        )
         if not local.is_loopback:
             raise ValueError("invalid proxy")
-        proxy = (socket.AF_INET if local.version == 4 else socket.AF_INET6, (str(local), socks_port))
+        proxy = (
+            socket.AF_INET if local.version == 4 else socket.AF_INET6,
+            (str(local), socks_port),
+        )
         if not expected_exit_ips:
             raise _ProbeError("expected_exit_ips_required")
         if not isinstance(expected_exit_ips, (list, tuple, set, frozenset)):
@@ -375,20 +473,26 @@ def probe_path(socks_host, socks_port, download_url, egress_url, expected_exit_i
         try:
             context = ssl.create_default_context()
             with ExitStack() as stack:
-                response, wire = _response(stack, proxy, download, context, deadline, bytes_required)
+                response, wire = _response(
+                    stack, proxy, download, context, deadline, bytes_required
+                )
                 result["status_code"] = response.status
                 result["latency_ms"] = (wire.first_byte_at - started) * 1000
                 if not 200 <= response.status < 300:
                     raise _ProbeError("http_status")
                 while result["body_bytes"] < bytes_required:
-                    chunk = response.read(min(16384, bytes_required - result["body_bytes"]))
+                    chunk = response.read(
+                        min(16384, bytes_required - result["body_bytes"])
+                    )
                     _remaining(deadline)
                     if not chunk:
                         raise _ProbeError("body_too_short")
                     result["body_bytes"] += len(chunk)
                 download_finished = time.monotonic()
             with ExitStack() as stack:
-                response, _ = _response(stack, proxy, egress, context, deadline, _MAX_JSON + 1)
+                response, _ = _response(
+                    stack, proxy, egress, context, deadline, _MAX_JSON + 1
+                )
                 result["egress_status_code"] = response.status
                 if not 200 <= response.status < 300:
                     raise _ProbeError("egress_http_status")

@@ -33,8 +33,9 @@ def _wait_bound(port, timeout):
         if remaining <= 0:
             return False
         try:
-            with socket.create_connection(("127.0.0.1", port),
-                                          timeout=min(remaining, 0.2)):
+            with socket.create_connection(
+                ("127.0.0.1", port), timeout=min(remaining, 0.2)
+            ):
                 return time.monotonic() < deadline
         except OSError:
             remaining = deadline - time.monotonic()
@@ -60,8 +61,12 @@ def probe_upstream(upstream, settings, compose_file, config_dir, run_compose) ->
     error_code = "invalid_configuration"
     try:
         timeout = settings.get("timeout", 15)
-        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-                or not math.isfinite(timeout) or timeout <= 0):
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
             return _failure("invalid_configuration")
         download_url = settings.get("download_url")
         egress_url = settings.get("egress_url")
@@ -69,8 +74,9 @@ def probe_upstream(upstream, settings, compose_file, config_dir, run_compose) ->
         bytes_required = settings.get("bytes_required", 131072)
 
         error_code = "compose_config_failed"
-        completed = run_compose(compose_file, ["config", "--format", "json"],
-                                capture=True)
+        completed = run_compose(
+            compose_file, ["config", "--format", "json"], capture=True
+        )
         if completed.returncode != 0:
             return _failure(error_code)
         service = json.loads(completed.stdout)["services"]["xray"]
@@ -79,6 +85,7 @@ def probe_upstream(upstream, settings, compose_file, config_dir, run_compose) ->
 
         error_code = "invalid_upstream"
         import vpn_transports
+
         outbound = vpn_transports.render_outbound(upstream, "probe_exit")
 
         error_code = "probe_setup_failed"
@@ -87,14 +94,20 @@ def probe_upstream(upstream, settings, compose_file, config_dir, run_compose) ->
             port = listener.getsockname()[1]
         config = {
             "log": {"access": "none", "loglevel": "warning"},
-            "inbounds": [{
-                "tag": "probe_socks", "listen": "127.0.0.1", "port": port,
-                "protocol": "socks", "settings": {"auth": "noauth", "udp": False},
-            }],
+            "inbounds": [
+                {
+                    "tag": "probe_socks",
+                    "listen": "127.0.0.1",
+                    "port": port,
+                    "protocol": "socks",
+                    "settings": {"auth": "noauth", "udp": False},
+                }
+            ],
             "outbounds": [outbound],
         }
-        fd, temporary = tempfile.mkstemp(prefix=".vpn-probe-", suffix=".json",
-                                         dir=Path(config_dir).resolve())
+        fd, temporary = tempfile.mkstemp(
+            prefix=".vpn-probe-", suffix=".json", dir=Path(config_dir).resolve()
+        )
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             os.fchmod(stream.fileno(), 0o600)
             json.dump(config, stream)
@@ -104,11 +117,24 @@ def probe_upstream(upstream, settings, compose_file, config_dir, run_compose) ->
         container_name = "vpn-probe-" + uuid.uuid4().hex
         error_code = "probe_start_failed"
         launch_attempted = True
-        completed = run_compose(compose_file, [
-            "run", "--rm", "-d", "--no-deps", "--name", container_name,
-            "-v", temporary + ":/etc/xray/probe.json:ro", "xray",
-            "run", "-config", "/etc/xray/probe.json",
-        ], capture=True)
+        completed = run_compose(
+            compose_file,
+            [
+                "run",
+                "--rm",
+                "-d",
+                "--no-deps",
+                "--name",
+                container_name,
+                "-v",
+                temporary + ":/etc/xray/probe.json:ro",
+                "xray",
+                "run",
+                "-config",
+                "/etc/xray/probe.json",
+            ],
+            capture=True,
+        )
         if completed.returncode != 0:
             result = _failure(error_code)
         else:
@@ -118,18 +144,27 @@ def probe_upstream(upstream, settings, compose_file, config_dir, run_compose) ->
             else:
                 error_code = "probe_failed"
                 result = vpn_health.probe_path(
-                    "127.0.0.1", port, download_url, egress_url, expected_exit_ips,
-                    bytes_required=bytes_required, timeout=timeout,
+                    "127.0.0.1",
+                    port,
+                    download_url,
+                    egress_url,
+                    expected_exit_ips,
+                    bytes_required=bytes_required,
+                    timeout=timeout,
                 )
     except Exception:
         result = _failure(error_code)
     finally:
         cleanup_failed = False
-        if launch_attempted:
+        if launch_attempted and container_name is not None:
             try:
-                subprocess.run(["docker", "rm", "-f", container_name], check=True,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               timeout=10)
+                subprocess.run(
+                    ["docker", "rm", "-f", container_name],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
             except Exception:
                 cleanup_failed = True
         if temporary is not None:
