@@ -1,7 +1,8 @@
 # CDN and independent client fallbacks
 
 The `pr-3-health-routing` tag is the rollback point before optional ECH support.
-This milestone pins Xray 26.3.27, preserving the existing supported transport
+This milestone initially pinned Xray 26.3.27; the final official-image update
+pins 26.10.31. It preserves the existing supported transport
 shapes and keys, and adds optional TLS ECH settings and private subscription
 exports. Existing REALITY links retain their identities and parameters.
 
@@ -58,8 +59,8 @@ session. Quotas remain per node/profile, not centrally synchronized across nodes
 
 ## Optional ECH
 
-ECH is off by default and only supported with TLS. Pinned 26.3.27 uses native
-`echConfigList`, `echForceQuery` and `echServerKeys`; the old 25.3.6 runtime did
+ECH is off by default and only supported with TLS. Pinned 26.10.31 uses native
+`echConfigList` and `echServerKeys`; the old 25.3.6 runtime did
 not implement these fields. Do not override the image with an older version and
 assume it enforces ECH. Share links use the optional percent-encoded `ech`
 parameter. A client must support that parameter and the pinned native feature.
@@ -67,7 +68,7 @@ Verify the client rather than assuming every subscription consumer supports ECH.
 
 Client `ech_config_list` accepts standard Base64 ECHConfigList or HTTPS DNS
 discovery, optionally `lookup.example+https://resolver/dns-query`. Query policy
-is explicitly full; weaker query settings and arbitrary socket options are
+remains full in the state contract; weaker query settings and arbitrary socket options are
 rejected. Empty ECH means ECH is disabled. No fixed CDN edge IP is embedded.
 Discovery requires a reachable resolver and valid HTTPS configuration; test it
 from the target network. Resolver/bootstrap connectivity is separate from user
@@ -83,8 +84,8 @@ the CDN's advertised client-facing ECH settings. Keep a separate non-ECH entry
 for explicit fallback and test failure behavior before rollout.
 
 Exact pinned field definitions and URI convention:
-[Xray TLS builder](https://github.com/XTLS/Xray-core/blob/v26.3.27/infra/conf/transport_internet.go),
-[ECH implementation](https://github.com/XTLS/Xray-core/blob/v26.3.27/transport/internet/tls/ech.go),
+[Xray TLS builder](https://github.com/XTLS/Xray-core/blob/v26.10.31/infra/conf/transport_security.go),
+[ECH implementation](https://github.com/XTLS/Xray-core/blob/v26.10.31/transport/internet/tls/ech.go),
 [share-link proposal](https://github.com/XTLS/Xray-core/discussions/716).
 
 ## Validation and rollback

@@ -25,7 +25,7 @@ class XrayIntegrationTests(unittest.TestCase):
             vpnctl.save_state(state_path, state)
             config = vpnctl.render_config(state)
             vpnctl.write_json(config_path, config)
-            image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.3.27")
+            image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.10.31")
             vpnctl.write_json(compose, {"services": {"xray": {
                 "image": image, "entrypoint": ["xray"],
                 "command": ["run", "-config", "/etc/xray/config.json"],

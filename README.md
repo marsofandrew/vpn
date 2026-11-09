@@ -23,6 +23,9 @@ See [CDN and client fallbacks](docs/CDN_CLIENTS.md) for private combined
 subscriptions, independent NY entries and optional ECH on the newer runtime pin.
 The [separate node inventory](docs/INVENTORY.md) records gateway/exit roles and
 future CGNAT hosts without provisioning or changing running routes.
+The runtime defaults to the official `ghcr.io/xtls/xray-core:26.10.31` image.
+See [validation status](docs/VALIDATION.md) for milestone tags and remaining
+official-image, CDN and real-network checks before deployment.
 
 ## Quick Start
 

@@ -1,4 +1,4 @@
-"""Strict, stdlib-only VLESS transports pinned to Xray 26.3.27.
+"""Strict, stdlib-only VLESS transports pinned to Xray 26.10.31.
 
 Public API: parse_link, validate_upstream, render_outbound, export_link,
 render_stream. Validation raises ValueError without including input values.
@@ -17,18 +17,20 @@ not opened locally: their paths refer to the Xray runtime filesystem.
 
 Optional TLS client ech_config_list accepts standard Base64 or HTTPS DNS
 discovery, optionally lookupdomain+https://resolver/dns-query. Configured ECH
-always uses ech_force_query='full'; other values are rejected. An empty client
+retains the full ECH query policy; weaker values are rejected. An empty client
 ech_config_list or URI ech= is treated as omitted. ech_force_query without a
 nonempty config is rejected. URI ech is percent-encoded ech_config_list; the
 full policy is implied and has no separate URI parameter. Optional server
 ech_server_keys accepts nonempty standard Base64. echSockopt is unsupported.
+The native pin applies ECH failure behavior directly; the legacy echForceQuery
+JSON field is not emitted.
 Existing non-ECH variants remain compatible with 25.3.6; ECH requires the
-26.3.27 capability pin and cannot be rendered for REALITY.
+26.10.31 capability pin and cannot be rendered for REALITY.
 
-Pinned validation sources (tag v26.3.27, commit d2758a0):
-https://github.com/XTLS/Xray-core/blob/v26.3.27/infra/conf/transport_internet.go
-https://github.com/XTLS/Xray-core/blob/v26.3.27/transport/internet/tls/ech.go
-https://github.com/XTLS/Xray-core/blob/v26.3.27/main/commands/all/tls/ech.go
+Pinned validation sources (tag v26.10.31, commit a4a3dff):
+https://github.com/XTLS/Xray-core/blob/v26.10.31/infra/conf/transport_security.go
+https://github.com/XTLS/Xray-core/blob/v26.10.31/transport/internet/tls/ech.go
+https://github.com/XTLS/Xray-core/blob/v26.10.31/main/commands/all/tls/ech.go
 https://github.com/XTLS/Xray-core/discussions/716
 
 PR2 deliberately restricts XHTTP+REALITY to explicit stream-one, even though
@@ -44,7 +46,7 @@ import uuid
 from typing import Any
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
 
-PINNED_XRAY_VERSION = "26.3.27"
+PINNED_XRAY_VERSION = "26.10.31"
 
 __all__ = [
     "PINNED_XRAY_VERSION",
@@ -588,7 +590,7 @@ def render_stream(transport: dict, security: dict, server: bool = False) -> dict
         else:
             native["allowInsecure"] = False
             if "ech_config_list" in ss:
-                native.update(echConfigList=ss["ech_config_list"], echForceQuery="full")
+                native["echConfigList"] = ss["ech_config_list"]
         result["tlsSettings"] = native
     return result
 

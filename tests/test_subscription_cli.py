@@ -33,7 +33,7 @@ class SubscriptionCliTests(unittest.TestCase):
             with patch.object(vpnctl, "run_compose", return_value=subprocess.CompletedProcess([], 0, stdout="Xray 25.3.6 (Xray)")):
                 with self.assertRaisesRegex(vpnctl.VpnctlError, "pinned Xray"):
                     vpnctl.validate_native(Path("compose.yaml"), candidate)
-            with patch.object(vpnctl, "run_compose", return_value=subprocess.CompletedProcess([], 0, stdout="Xray 26.3.27 (Xray)")):
+            with patch.object(vpnctl, "run_compose", return_value=subprocess.CompletedProcess([], 0, stdout="Xray 26.10.31 (Xray)")):
                 vpnctl.validate_native(Path("compose.yaml"), candidate)
 
     def test_remote_entries_export_without_changing_local_identity(self):

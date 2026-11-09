@@ -1,6 +1,6 @@
-"""Local Xray 26.3.27 ECH transfers, enabled only by an integration flag.
+"""Local Xray 26.10.31 ECH transfers, enabled only by an integration flag.
 
-XRAY_ECH_INTEGRATION=1 XRAY_TEST_IMAGE=teddysun/xray:26.3.27 \
+XRAY_ECH_INTEGRATION=1 \
     python3 -m unittest discover -s tests -p test_ech_integration.py -v
 """
 
@@ -57,15 +57,15 @@ class EchIntegrationTests(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.x509.oid import NameOID
 
-        cls.image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.3.27")
+        cls.image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.10.31")
         cls.secret_values = []
         temporary = tempfile.TemporaryDirectory(prefix="xray-ech-material-")
         cls.addClassCleanup(temporary.cleanup)
         cls.material = Path(temporary.name).resolve()
         version = cls.command(["docker", "run", "--rm", "--entrypoint", "xray",
                                cls.image, "version"])
-        if not re.search(r"\bXray 26\.3\.27\b", version):
-            raise AssertionError("XRAY_TEST_IMAGE must provide Xray 26.3.27")
+        if not re.search(r"\bXray 26\.10\.31\b", version):
+            raise AssertionError("XRAY_TEST_IMAGE must provide Xray 26.10.31")
         cls.ech_config, cls.ech_keys = cls.generate_ech()
         cls.wrong_ech_config, _ = cls.generate_ech()
         if cls.ech_config == cls.wrong_ech_config:
@@ -173,7 +173,7 @@ class EchIntegrationTests(unittest.TestCase):
                     "xhttpSettings": {"path": "/ech-test", "mode": "stream-one"},
                     "tlsSettings": {
                         "serverName": "origin.example.test", "minVersion": "1.3", "alpn": ["h2"],
-                        "echConfigList": self.ech_config, "echForceQuery": "full",
+                        "echConfigList": self.ech_config,
                         "disableSystemRoot": True,
                         "certificates": [{"certificateFile": "/work/cert.pem", "usage": "verify"}],
                     },

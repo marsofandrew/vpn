@@ -32,7 +32,7 @@ class NativeTransportTests(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import rsa, x25519
         from cryptography.x509.oid import NameOID
 
-        cls.image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.3.27")
+        cls.image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.10.31")
         temporary = tempfile.TemporaryDirectory(prefix="vpn-native-transports-")
         cls.addClassCleanup(temporary.cleanup)
         cls.root = Path(temporary.name).resolve()

@@ -3,9 +3,8 @@
 Optional pinned native validation:
   XRAY_BINARY=/path/to/xray python3 -m unittest discover -s tests -p test_transports.py
 or XRAY_TRANSPORT_INTEGRATION=1 (Docker, XRAY_TEST_IMAGE defaults to
- ghcr.io/xtls/xray-core:26.3.27). Override XRAY_TEST_IMAGE with
-teddysun/xray:26.3.27 for the cached alternate image. XRAY_BINARY must also
-be 26.3.27. Native checks
+ ghcr.io/xtls/xray-core:26.10.31). XRAY_BINARY must also
+be 26.10.31. Native checks
 assert the pinned version before testing configs. Non-ECH variants remain
 compatible with the previous 25.3.6 runtime.
 """
@@ -324,7 +323,7 @@ class ValidationTests(unittest.TestCase):
 
 class ECHTests(unittest.TestCase):
     def test_explicit_version_capability(self):
-        self.assertEqual(transports.PINNED_XRAY_VERSION, "26.3.27")
+        self.assertEqual(transports.PINNED_XRAY_VERSION, "26.10.31")
         self.assertIn("PINNED_XRAY_VERSION", transports.__all__)
 
     def test_static_config_parse_render_and_export(self):
@@ -337,7 +336,7 @@ class ECHTests(unittest.TestCase):
                 self.assertIs(settings["allow_insecure"], False)
                 native = transports.render_outbound(u, "exit")["streamSettings"]["tlsSettings"]
                 self.assertEqual(native, {"serverName": "example.com", "alpn": ["h2", "http/1.1"],
-                    "allowInsecure": False, "echConfigList": ECH_CONFIG, "echForceQuery": "full"})
+                    "allowInsecure": False, "echConfigList": ECH_CONFIG})
                 exported = transports.export_link(u)
                 self.assertIn("ech=%2B%2F8%3D", exported)
                 self.assertNotIn("ech_force_query", exported)
@@ -353,7 +352,7 @@ class ECHTests(unittest.TestCase):
                 self.assertIsNone(transports.validate_upstream(u))
                 native = transports.render_stream(u["transport"], u["security"])["tlsSettings"]
                 self.assertEqual(native["echConfigList"], value)
-                self.assertEqual(native["echForceQuery"], "full")
+                self.assertNotIn("echForceQuery", native)
                 exported = transports.export_link(u)
                 self.assertEqual(parse_qs(urlsplit(exported).query)["ech"], [value])
                 self.assertEqual(transports.parse_link(exported), u)
@@ -371,7 +370,7 @@ class ECHTests(unittest.TestCase):
     def test_force_query_defaults_to_full_and_rejects_weaker_or_orphan_policy(self):
         u = upstream("xhttp", "tls", ech=ECH_CONFIG)
         del u["security"]["settings"]["ech_force_query"]
-        self.assertEqual(transports.render_outbound(u, "exit")["streamSettings"]["tlsSettings"]["echForceQuery"], "full")
+        self.assertNotIn("echForceQuery", transports.render_outbound(u, "exit")["streamSettings"]["tlsSettings"])
         for value in ("", "none", "half", "FULL", None, True, [], {}):
             with self.subTest(policy=value):
                 bad = changed(u, ("security", "settings", "ech_force_query"), value)
@@ -548,9 +547,9 @@ class NativeTests(unittest.TestCase):
         binary = os.environ.get("XRAY_BINARY")
         self.runtime_root = str(self.root) if binary else "/work"
         self.command = [binary] if binary else ["docker", "run", "--rm", "-i", "--network", "none", "--entrypoint", "xray",
-            "-v", str(self.root) + ":/work:ro", os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.3.27")]
+            "-v", str(self.root) + ":/work:ro", os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.10.31")]
         version = self.native("version")
-        self.assertRegex(version, r"\AXray 26\.3\.27 \(")
+        self.assertRegex(version, r"\AXray 26\.10\.31 \(")
 
     def native(self, *args, config=None):
         result = subprocess.run(self.command + list(args), input=json.dumps(config) if config is not None else None,

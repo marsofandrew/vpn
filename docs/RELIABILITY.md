@@ -14,6 +14,19 @@ operator permissions, and same config/Compose paths. Status and streaming logs
 do not block mutations. Direct JSON edits and other independent Xray managers
 are outside this locking contract.
 
+The installed quota and health units use the installer account (`SUDO_USER`
+when installed through sudo). Existing root-owned runtime directories must be
+made accessible to that same operator before enabling the timers. On a host
+managed by the currently logged-in operator, after stopping both timers:
+
+```sh
+sudo chown -R "$USER":"$(id -gn)" data
+```
+
+This changes ownership only; it does not regenerate keys or replace file contents.
+If the installation is intentionally root-managed, keep the units and all CLI
+commands under root instead. Do not alternate root and unprivileged writers.
+
 Files are atomically replaced with mode 0600 and fsync. A validated previous
 state is kept at `.bak`; missing or corrupt primary state recovers from it.
 The backup can be one update behind, so recovery is reported on stderr.
@@ -36,7 +49,8 @@ stage it. State-only changes skip recreation when effective config is unchanged.
 Explicit restart always recreates. Recreation interrupts established connections.
 
 PR 1 pinned Xray 25.3.6 for compatibility validation; PR 4 upgrades the default
-to 26.3.27 for optional ECH, with compatibility tests repeated. A version pin is
+to 26.3.27 for optional ECH; the final official-image pin is 26.10.31.
+See VALIDATION.md for current evidence and registry limitations. A version pin is
 not a security audit. `XRAY_IMAGE` overrides require their own validation. Root
 is retained to read mode-0600 host secrets and bind existing low ports without
 changing ownership on deployed hosts. All capabilities are dropped except
