@@ -3,6 +3,8 @@ qrcodes/
 *.png
 __pycache__/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
 vpn_config.json
 config.json

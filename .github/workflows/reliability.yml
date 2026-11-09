@@ -10,10 +10,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - run: ruff check --select F,E9 .
+      - run: ruff format --check vpn_*.py
+      - run: mypy --ignore-missing-imports vpn_transports.py vpn_health.py vpn_monitor.py vpn_subscriptions.py vpn_inventory.py
       - run: python -m unittest discover -s tests -v
       - run: docker compose config -q
       - run: python -m unittest discover -s tests -v
         env:
           XRAY_INTEGRATION: '1'
           XRAY_TRANSPORT_INTEGRATION: '1'
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pip-audit==2.9.0
+      - run: pip-audit -r requirements.txt
+      - run: >-
+          docker run --rm aquasec/trivy:0.61.1 image
+          --scanners vuln --severity HIGH,CRITICAL --exit-code 1
+          ghcr.io/xtls/xray-core:26.10.31
