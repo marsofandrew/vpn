@@ -231,7 +231,8 @@ class ReliabilityTests(unittest.TestCase):
             {"name": f"user>>>{email}>>>traffic>>>uplink", "value": 5},
             {"name": f"user>>>{email}>>>traffic>>>downlink", "value": 7},
         ]}
-        with patch.object(vpnctl, "runtime_epoch", return_value="rollback-process"), \
+        with patch.object(vpnctl, "current_usage_period", return_value="2099-02"), \
+                patch.object(vpnctl, "runtime_epoch", return_value="rollback-process"), \
                 patch.object(vpnctl, "query_xray_stats", return_value=next_stats):
             vpnctl.sample_usage(restored, self.compose)
             vpnctl.sample_usage(restored, self.compose)

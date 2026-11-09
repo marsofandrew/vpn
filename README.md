@@ -17,6 +17,8 @@ accounting limits, image hardening, migration and rollback instructions.
 state with `restart` or `up`, which validate and recreate the container safely.
 The [v4 migration guide](docs/SCHEMA_V4.md) covers named upstreams, route
 assignments and XHTTP profiles; existing TCP/REALITY client links remain valid.
+See [health routing](docs/HEALTH_ROUTING.md) for priority failover, probe setup,
+foreign-only routing and the optional gateway health timer.
 
 ## Quick Start
 

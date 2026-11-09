@@ -92,6 +92,39 @@ TIMER
 sudo systemctl daemon-reload
 sudo systemctl enable --now "${SERVICE_NAME}.timer"
 
+sudo tee "/etc/systemd/system/vpnctl-health.service" >/dev/null <<HEALTHSERVICE
+[Unit]
+Description=Probe vpnctl foreign upstreams and apply route selection
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=${INSTALL_USER}
+SupplementaryGroups=docker
+UMask=0077
+WorkingDirectory=${REPO_DIR}
+ExecStart=${PYTHON_BIN} ${REPO_DIR}/vpnctl.py health check
+HEALTHSERVICE
+
+sudo tee "/etc/systemd/system/vpnctl-health.timer" >/dev/null <<HEALTHTIMER
+[Unit]
+Description=Check vpnctl upstream health after each probe cycle
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+AccuracySec=1s
+Unit=vpnctl-health.service
+
+[Install]
+WantedBy=timers.target
+HEALTHTIMER
+sudo systemctl daemon-reload
+if [ "${ENABLE_HEALTH_TIMER:-0}" = "1" ]; then
+  sudo systemctl enable --now vpnctl-health.timer
+fi
+
 echo "Host setup complete."
 if [ "${INSTALL_USER}" != "root" ]; then
   echo "User '${INSTALL_USER}' was added to the docker group."

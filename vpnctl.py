@@ -2,7 +2,9 @@
 import argparse
 import base64
 import fcntl
+import ipaddress
 import json
+import math
 import os
 import shutil
 import socket
@@ -19,6 +21,8 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import qrcode
 import vpn_transports
+import vpn_health
+import vpn_monitor
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
@@ -645,6 +649,8 @@ def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> N
         raise VpnctlError("unsupported state version")
     if state["node"]["role"] not in {"gateway", "exit", "both"}:
         raise VpnctlError("invalid node role")
+    if not isinstance(state["node"].get("foreign_only", False), bool):
+        raise VpnctlError("foreign_only must be a boolean")
     validate_profile_name(state["node"]["id"])
     for name, upstream in state["upstreams"].items():
         validate_stable_name(name)
@@ -656,12 +662,21 @@ def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> N
             raise VpnctlError(str(error)) from None
     for name, policy in state["routing_policies"].items():
         validate_stable_name(name)
-        if policy["type"] not in {"direct", "upstream", "block"}:
+        if policy["type"] not in {"direct", "upstream", "block", "balanced", "priority"}:
             raise VpnctlError("unsupported routing policy")
-        if policy["type"] == "upstream":
+        if policy["type"] in {"upstream", "balanced", "priority"}:
             members = policy.get("upstreams", [])
-            if len(members) != 1 or members[0] not in state["upstreams"]:
-                raise VpnctlError("policy must reference one existing upstream")
+            if not members or len(set(members)) != len(members) or any(member not in state["upstreams"] for member in members):
+                raise VpnctlError("policy must reference distinct existing upstreams")
+            if policy["type"] == "upstream" and len(members) != 1:
+                raise VpnctlError("upstream policy requires one upstream")
+            cooldown = policy.get("cooldown", 60)
+            if isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)) or not math.isfinite(cooldown) or cooldown < 0:
+                raise VpnctlError("cooldown must be finite and nonnegative")
+            try:
+                vpn_health.select_route(policy, state["upstreams"], {}, time.time())
+            except ValueError as error:
+                raise VpnctlError(str(error)) from None
 
     names: set[str] = set()
     ports: dict[int, str] = {}
@@ -675,6 +690,8 @@ def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> N
         policy = state["routing_policies"].get(route)
         if policy is None:
             raise VpnctlError("profile references an unknown policy")
+        if state["node"].get("foreign_only") and policy["type"] == "direct":
+            raise VpnctlError("foreign-only nodes cannot assign direct policies")
         if policy["type"] == "upstream" and not state["upstreams"][policy["upstreams"][0]]["enabled"]:
             raise VpnctlError("profile references a disabled upstream")
         if name in names:
@@ -817,7 +834,10 @@ def upgrade_state(raw: dict[str, Any]) -> dict[str, Any]:
 
 def load_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise VpnctlError("JSON root must be an object")
+    return data
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
@@ -863,14 +883,20 @@ def load_state(path: Path) -> dict[str, Any]:
     backup = backup_path(path)
     if path.exists() or backup.exists():
         try:
-            state = migrate_legacy_state(load_json(path))
-            os.chmod(path, 0o600)
-            return state
-        except (OSError, ValueError, KeyError, TypeError, VpnctlError):
-            state = migrate_legacy_state(load_json(backup))
+            raw = load_json(path)
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+            previous = load_json(backup)
+            if previous.get("version") == 3:
+                original = path.with_name(path.name + ".v3.bak")
+                if not original.exists():
+                    write_json(original, previous)
+            state = migrate_legacy_state(previous)
             write_json(path, state)
             print("Recovered state from validated backup.", file=sys.stderr)
             return state
+        state = migrate_legacy_state(raw)
+        os.chmod(path, 0o600)
+        return state
     if not path.exists():
         legacy_path = Path("vpn_config.json")
         if legacy_path.exists():
@@ -961,6 +987,11 @@ def profile_outbound_tag(profile: dict[str, Any], state: dict[str, Any]) -> str:
     policy = state["routing_policies"][profile["route"]]
     if policy["type"] == "upstream":
         return policy["upstreams"][0]
+    if policy["type"] in {"priority", "balanced"}:
+        selected = policy.get("current_upstream")
+        if selected in policy["upstreams"] and state["upstreams"][selected]["enabled"] and state.get("health", {}).get(selected, {}).get("status") == "healthy":
+            return selected
+        return "block"
     return policy["type"]
 
 
@@ -977,12 +1008,15 @@ def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> di
         }
     )
 
-    outbounds = [render_direct_outbound()]
+    guarded = state["node"].get("foreign_only") or any(
+        state["routing_policies"][profile["route"]]["type"] in {"priority", "balanced", "block"}
+        for profile in all_profiles(state))
+    outbounds = ([{"tag": "block", "protocol": "blackhole", "settings": {}}] if guarded else [])
+    if not state["node"].get("foreign_only"):
+        outbounds.append(render_direct_outbound())
     referenced = {member for profile in all_profiles(state)
                   for member in state["routing_policies"][profile["route"]].get("upstreams", [])}
-    outbounds.extend(render_upstream_outbound(state, name) for name in sorted(referenced))
-    if any(state["routing_policies"][profile["route"]]["type"] == "block" for profile in all_profiles(state)):
-        outbounds.append({"tag": "block", "protocol": "blackhole", "settings": {}})
+    outbounds.extend(render_upstream_outbound(state, name) for name in sorted(referenced) if state["upstreams"][name]["enabled"])
 
     routing_rules = [
         {
@@ -1065,6 +1099,7 @@ def persist_state_and_config(
     compose_file: Path | None = None,
     restart: bool = False,
 ) -> None:
+    ensure_monthly_period(state)
     candidate = render_config(state)
     if restart and compose_file is not None:
         deploy_config(state, state_path, config_path, compose_file, candidate)
@@ -1221,6 +1256,7 @@ def sample_usage(state: dict[str, Any], compose_file: Path) -> None:
     stats = query_xray_stats(compose_file, reset=False, state=state)
     if runtime_epoch(compose_file) != before:
         raise VpnctlError("Xray restarted during statistics read; retry the command")
+    ensure_monthly_period(state)
     apply_usage_snapshot(state, collect_usage_deltas(stats), before)
 
 
@@ -1308,6 +1344,8 @@ def recover_deployment(state_path: Path, config_path: Path, compose_file: Path) 
 
 def deploy_config(state: dict[str, Any], state_path: Path, config_path: Path,
                   compose_file: Path, candidate: dict[str, Any], force: bool = False) -> None:
+    if ensure_monthly_period(state):
+        candidate = render_config(state)
     validate_config(candidate)
     try:
         previous_config = load_json(config_path) if config_path.exists() else None
@@ -1573,6 +1611,7 @@ def command_upstream_set(args: argparse.Namespace) -> None:
         state["upstreams"][name] = vpn_transports.parse_link(args.link)
     except ValueError as error:
         raise VpnctlError(str(error)) from None
+    state.setdefault("health", {}).pop(name, None)
     state["routing_policies"].setdefault(name, {"type": "upstream", "upstreams": [name]})
     persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
     print(f"Upstream saved: {name}")
@@ -1616,6 +1655,94 @@ def command_route(args: argparse.Namespace) -> None:
         profile["outbound_mode"] = "direct" if state["routing_policies"][args.policy]["type"] == "direct" else "proxy"
         persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
     print(f"{profile_label(profile)}\tpolicy={profile['route']}")
+
+
+def command_policy(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    if args.policy_command == "list":
+        for name, policy in state["routing_policies"].items():
+            print(f"{name}\ttype={policy['type']}\tmembers={','.join(policy.get('upstreams', []))}")
+        return
+    name = validate_stable_name(args.name)
+    if name in {"direct", "block"}:
+        raise VpnctlError("built-in policies cannot be replaced")
+    policy = {"type": args.type}
+    if args.type in {"upstream", "priority", "balanced"}:
+        policy["upstreams"] = args.upstream or []
+        policy["cooldown"] = args.cooldown
+    state["routing_policies"][name] = policy
+    persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
+
+
+def command_node(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    state["node"] = {"id": validate_stable_name(args.id), "role": args.role, "foreign_only": args.foreign_only}
+    persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
+
+
+def command_health(args: argparse.Namespace) -> None:
+    state = load_state(args.state)
+    operation = args.health_command
+    if operation == "configure":
+        if args.name not in state["upstreams"]:
+            raise VpnctlError("unknown upstream")
+        if not math.isfinite(args.interval) or not math.isfinite(args.timeout) or args.interval <= 0 or args.fail_threshold <= 0 or args.success_threshold <= 0 or args.timeout <= 0:
+            raise VpnctlError("probe intervals, thresholds and timeout must be positive")
+        try:
+            for value in (args.download_url, args.egress_url):
+                endpoint = urlparse(value)
+                if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.fragment:
+                    raise ValueError
+                if endpoint.port is not None:
+                    parse_port(endpoint.port)
+            for address in args.expected_exit_ip:
+                ipaddress.ip_address(address)
+        except (ValueError, argparse.ArgumentTypeError):
+            raise VpnctlError("probes require HTTPS URLs without credentials and literal expected exit IPs") from None
+        state.setdefault("health_settings", {})[args.name] = {
+            "download_url": args.download_url, "egress_url": args.egress_url,
+            "expected_exit_ips": args.expected_exit_ip, "interval": args.interval,
+            "fail_threshold": args.fail_threshold, "success_threshold": args.success_threshold,
+            "timeout": args.timeout, "bytes_required": args.bytes_required,
+        }
+        save_state(args.state, state)
+        return
+    if operation == "events":
+        for event in state.get("route_events", []):
+            print(f"{event['at']}\t{event['policy']}\t{event['from'] or 'block'} -> {event['to']}")
+        return
+    if operation == "check":
+        now = time.time()
+        health = state.setdefault("health", {})
+        for name, upstream in state["upstreams"].items():
+            settings = state.get("health_settings", {}).get(name)
+            if not upstream["enabled"] or not settings or health.get(name, {}).get("next_probe_at", 0) > now:
+                continue
+            result = vpn_monitor.probe_upstream(upstream, settings, args.compose_file, args.config.parent, run_compose)
+            health[name] = vpn_health.record_probe(health.get(name, {}), result, time.time(), settings)
+        events = []
+        for name, policy in state["routing_policies"].items():
+            if policy["type"] not in {"priority", "balanced"}:
+                continue
+            before = policy.get("current_upstream")
+            selected = vpn_health.select_route(policy, state["upstreams"], health, time.time())
+            policy["current_upstream"] = selected
+            if before != selected:
+                events.append({"at": utc_now(), "policy": name, "from": before, "to": selected or "block"})
+        state["route_events"] = (state.get("route_events", []) + events)[-100:]
+        persist_state_and_config(state, args.state, args.config, args.compose_file, restart=not args.no_restart)
+        for event in events:
+            print(f"Route switch: {event['policy']} {event['from'] or 'block'} -> {event['to']}")
+    for name, upstream in state["upstreams"].items():
+        record = state.get("health", {}).get(name, {})
+        print(f"{name}\tenabled={upstream['enabled']}\tstatus={record.get('status', 'unknown')}"
+              f"\tfailures={record.get('consecutive_failures', 0)}\tlast_success={record.get('last_success')}"
+              f"\tlast_probe={record.get('last_probe')}\terror={record.get('error')}"
+              f"\tlatency_ms={record.get('latency_ms')}\tthroughput_bps={record.get('throughput_bps')}"
+              f"\ttransfer_ms={record.get('download_time_ms')}\tbody_bytes={record.get('body_bytes')}")
+    for name, policy in state["routing_policies"].items():
+        if policy["type"] in {"priority", "balanced"}:
+            print(f"policy={name}\tselected={policy.get('current_upstream') or 'block'}")
 
 
 def command_render(args: argparse.Namespace) -> None:
@@ -1857,6 +1984,43 @@ def build_parser() -> argparse.ArgumentParser:
             operation_parser.add_argument("--policy", required=True)
             operation_parser.add_argument("--no-restart", action="store_true")
         operation_parser.set_defaults(func=command_route)
+
+    policy_parser = subparsers.add_parser("policy", help="Manage named routing policies.")
+    policy_subparsers = policy_parser.add_subparsers(dest="policy_command", required=True)
+    policy_subparsers.add_parser("list").set_defaults(func=command_policy)
+    policy_set = policy_subparsers.add_parser("set")
+    policy_set.add_argument("name")
+    policy_set.add_argument("--type", choices=["direct", "block", "upstream", "balanced", "priority"], required=True)
+    policy_set.add_argument("--upstream", action="append")
+    policy_set.add_argument("--cooldown", type=float, default=60)
+    policy_set.add_argument("--no-restart", action="store_true")
+    policy_set.set_defaults(func=command_policy)
+
+    node_parser = subparsers.add_parser("node", help="Configure local node role and routing guard.")
+    node_parser.add_argument("--id", required=True)
+    node_parser.add_argument("--role", choices=["gateway", "exit", "both"], required=True)
+    node_parser.add_argument("--foreign-only", action="store_true")
+    node_parser.add_argument("--no-restart", action="store_true")
+    node_parser.set_defaults(func=command_node)
+
+    health_parser = subparsers.add_parser("health", help="Inspect or probe upstream paths on this gateway.")
+    health_parser.set_defaults(func=command_health, health_command="show")
+    health_subparsers = health_parser.add_subparsers(dest="health_command")
+    health_subparsers.add_parser("events").set_defaults(func=command_health)
+    health_check = health_subparsers.add_parser("check")
+    health_check.add_argument("--no-restart", action="store_true")
+    health_check.set_defaults(func=command_health)
+    health_configure = health_subparsers.add_parser("configure")
+    health_configure.add_argument("name")
+    health_configure.add_argument("--download-url", required=True)
+    health_configure.add_argument("--egress-url", required=True)
+    health_configure.add_argument("--expected-exit-ip", action="append", required=True)
+    health_configure.add_argument("--interval", type=float, default=30)
+    health_configure.add_argument("--fail-threshold", type=int, default=3)
+    health_configure.add_argument("--success-threshold", type=int, default=3)
+    health_configure.add_argument("--timeout", type=float, default=15)
+    health_configure.add_argument("--bytes-required", type=int, choices=[131072, 1048576], default=131072)
+    health_configure.set_defaults(func=command_health)
 
     profile_parser = subparsers.add_parser("profile", help="Manage VPN profiles.")
     profile_subparsers = profile_parser.add_subparsers(dest="profile_command", required=True)

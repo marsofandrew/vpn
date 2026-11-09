@@ -67,5 +67,17 @@ class XrayIntegrationTests(unittest.TestCase):
                         vpnctl.deploy_config(state, state_path, config_path, compose, vpnctl.render_config(state))
                 self.assertEqual(vpnctl.load_json(config_path), changed)
                 vpnctl.verify_xray(compose, changed)
+                recovered = vpnctl.load_state(state_path)
+                key = vpnctl.generate_reality_keys()["public_key"]
+                recovered["upstreams"]["ny"] = vpnctl.vpn_transports.parse_link(
+                    "vless://11111111-2222-3333-4444-555555555555@exit.example.com:443"
+                    f"?type=tcp&security=reality&pbk={key}&sid=abcd&sni=example.com")
+                recovered["routing_policies"]["failover"] = {"type": "priority", "upstreams": ["ny"]}
+                recovered["profiles"][0]["route"] = "failover"
+                recovered["node"]["foreign_only"] = True
+                blocked = vpnctl.render_config(recovered)
+                self.assertNotIn("freedom", [item["protocol"] for item in blocked["outbounds"]])
+                vpnctl.deploy_config(recovered, state_path, config_path, compose, blocked)
+                vpnctl.verify_xray(compose, blocked)
             finally:
                 vpnctl.run_compose(compose, ["down", "--remove-orphans"], capture=True)

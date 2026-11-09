@@ -47,6 +47,18 @@ class SchemaV4Tests(unittest.TestCase):
         with self.assertRaises(vpnctl.VpnctlError):
             vpnctl.migrate_legacy_state(legacy)
 
+    def test_unsupported_primary_is_not_replaced_by_an_older_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            previous = self.legacy()
+            vpnctl.write_json(vpnctl.backup_path(path), previous)
+            unsupported = copy.deepcopy(previous)
+            unsupported["version"] = 99
+            vpnctl.write_json(path, unsupported)
+            with self.assertRaises(vpnctl.VpnctlError):
+                vpnctl.load_state(path)
+            self.assertEqual(vpnctl.load_json(path), unsupported)
+
     def test_xhttp_profile_import_and_export_preserve_transport(self):
         state = vpnctl.create_state("vpn.example.com", "example.com:443", "example.com", 8443, ["phone"], None)
         profile = state["profiles"][0]
