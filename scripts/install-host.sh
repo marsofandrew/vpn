@@ -68,6 +68,8 @@ After=docker.service
 
 [Service]
 Type=oneshot
+User=${INSTALL_USER}
+SupplementaryGroups=docker
 UMask=0077
 WorkingDirectory=${REPO_DIR}
 ExecStart=${PYTHON_BIN} ${REPO_DIR}/vpnctl.py quota enforce

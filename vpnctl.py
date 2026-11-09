@@ -1209,7 +1209,12 @@ def recover_deployment(state_path: Path, config_path: Path, compose_file: Path) 
 def deploy_config(state: dict[str, Any], state_path: Path, config_path: Path,
                   compose_file: Path, candidate: dict[str, Any], force: bool = False) -> None:
     validate_config(candidate)
-    previous_config = load_json(config_path) if config_path.exists() else None
+    try:
+        previous_config = load_json(config_path) if config_path.exists() else None
+    except (ValueError, OSError):
+        if not force:
+            raise
+        previous_config = load_json(backup_path(config_path)) if backup_path(config_path).exists() else None
     if previous_config is not None:
         os.chmod(config_path, 0o600)
     if previous_config == candidate and not force:
@@ -1222,6 +1227,7 @@ def deploy_config(state: dict[str, Any], state_path: Path, config_path: Path,
     finally:
         candidate_path.unlink(missing_ok=True)
     previous_state = load_state(state_path)
+    ensure_monthly_period(previous_state)
     running = run_compose(compose_file, ["ps", "-q", XRAY_SERVICE], capture=True).stdout.strip()
     if running:
         try:
