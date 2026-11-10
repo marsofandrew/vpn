@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import base64
+import copy
 import fcntl
 import ipaddress
 import json
@@ -26,6 +27,7 @@ import vpn_health
 import vpn_monitor
 import vpn_subscriptions
 import vpn_inventory
+import vpn_validation
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
@@ -269,7 +271,7 @@ def validate_upstream(upstream: dict[str, Any] | None) -> None:
 def validate_outbound_mode(mode: str | None) -> str:
     normalized = (mode or OUTBOUND_DIRECT).strip().lower()
     if normalized not in OUTBOUND_MODES:
-        raise VpnctlError(f"invalid outbound mode: {mode}. Use direct or proxy.")
+        raise VpnctlError("invalid outbound mode; use direct or proxy")
     return normalized
 
 
@@ -650,6 +652,10 @@ def proxy_profiles(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> None:
+    try:
+        vpn_validation.validate_state_shape(state)
+    except ValueError as error:
+        raise VpnctlError(str(error)) from None
     state["server_host"] = validate_server_host(state.get("server_host"))
     profiles = all_profiles(state)
     if not profiles:
@@ -703,7 +709,7 @@ def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> N
             raise VpnctlError("profile references an unknown policy")
         if state["node"].get("foreign_only") and policy["type"] == "direct":
             raise VpnctlError("foreign-only nodes cannot assign direct policies")
-        if policy["type"] == "upstream" and not state["upstreams"][policy["upstreams"][0]]["enabled"]:
+        if policy["type"] == "upstream" and not state["upstreams"][policy["upstreams"][0]].get("enabled", True):
             raise VpnctlError("profile references a disabled upstream")
         if name in names:
             raise VpnctlError(f"duplicate profile name: {name}")
@@ -724,7 +730,7 @@ def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> N
                 raise VpnctlError(f"duplicate client name in profile {name}: {client_name}")
             client_names.add(client_name)
             if client_id in ids:
-                raise VpnctlError(f"duplicate client id {client_id} in profiles {ids[client_id]} and {name}")
+                raise VpnctlError("duplicate client authentication identity")
             if email in emails:
                 raise VpnctlError(f"duplicate client email {email} in profiles {emails[email]} and {name}")
             ids[client_id] = name
@@ -732,6 +738,13 @@ def validate_state(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> N
 
 
 def migrate_legacy_state(raw: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return _migrate_legacy_state(raw)
+    except (KeyError, TypeError, AttributeError, ValueError, argparse.ArgumentTypeError):
+        raise VpnctlError("invalid state structure or field types") from None
+
+
+def _migrate_legacy_state(raw: dict[str, Any]) -> dict[str, Any]:
     if raw.get("version") == STATE_VERSION:
         raw.setdefault("usage_period", current_usage_period())
         validate_state(raw)
@@ -897,11 +910,11 @@ def load_state(path: Path) -> dict[str, Any]:
             raw = load_json(path)
         except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
             previous = load_json(backup)
+            state = migrate_legacy_state(copy.deepcopy(previous))
             if previous.get("version") == 3:
                 original = path.with_name(path.name + ".v3.bak")
                 if not original.exists():
                     write_json(original, previous)
-            state = migrate_legacy_state(previous)
             write_json(path, state)
             print("Recovered state from validated backup.", file=sys.stderr)
             return state
@@ -921,11 +934,11 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     state["updated_at"] = utc_now()
     if path.exists():
         previous_raw = load_json(path)
+        previous = migrate_legacy_state(copy.deepcopy(previous_raw))
         if previous_raw.get("version") == 3:
             original = path.with_name(path.name + ".v3.bak")
             if not original.exists():
                 write_json(original, previous_raw)
-        previous = migrate_legacy_state(previous_raw)
         write_json(backup_path(path), previous)
     write_json(path, state)
 
@@ -1000,7 +1013,7 @@ def profile_outbound_tag(profile: dict[str, Any], state: dict[str, Any]) -> str:
         return policy["upstreams"][0]
     if policy["type"] in {"priority", "balanced"}:
         selected = policy.get("current_upstream")
-        if selected in policy["upstreams"] and state["upstreams"][selected]["enabled"] and state.get("health", {}).get(selected, {}).get("status") == "healthy":
+        if selected in policy["upstreams"] and state["upstreams"][selected].get("enabled", True) and state.get("health", {}).get(selected, {}).get("status") == "healthy":
             return selected
         return "block"
     return policy["type"]
@@ -1027,7 +1040,7 @@ def render_config(state: dict[str, Any], api_port: int = DEFAULT_API_PORT) -> di
         outbounds.append(render_direct_outbound())
     referenced = {member for profile in all_profiles(state)
                   for member in state["routing_policies"][profile["route"]].get("upstreams", [])}
-    outbounds.extend(render_upstream_outbound(state, name) for name in sorted(referenced) if state["upstreams"][name]["enabled"])
+    outbounds.extend(render_upstream_outbound(state, name) for name in sorted(referenced) if state["upstreams"][name].get("enabled", True))
 
     routing_rules = [
         {
@@ -1626,7 +1639,7 @@ def command_upstream_show(args: argparse.Namespace) -> None:
     print(
         f"{name}\thost={upstream['address']}\tport={upstream['port']}"
         f"\ttransport={upstream['transport']['type']}\tsecurity={upstream['security']['type']}"
-        f"\tenabled={upstream['enabled']}"
+        f"\tenabled={upstream.get('enabled', True)}"
     )
 
 
@@ -1745,7 +1758,7 @@ def command_health(args: argparse.Namespace) -> None:
         health = state.setdefault("health", {})
         for name, upstream in state["upstreams"].items():
             settings = state.get("health_settings", {}).get(name)
-            if not upstream["enabled"] or not settings or health.get(name, {}).get("next_probe_at", 0) > now:
+            if not upstream.get("enabled", True) or not settings or health.get(name, {}).get("next_probe_at", 0) > now:
                 continue
             result = vpn_monitor.probe_upstream(upstream, settings, args.compose_file, args.config.parent, run_compose)
             health[name] = vpn_health.record_probe(health.get(name, {}), result, time.time(), settings)
@@ -1764,7 +1777,7 @@ def command_health(args: argparse.Namespace) -> None:
             print(f"Route switch: {event['policy']} {event['from'] or 'block'} -> {event['to']}")
     for name, upstream in state["upstreams"].items():
         record = state.get("health", {}).get(name, {})
-        print(f"{name}\tenabled={upstream['enabled']}\tstatus={record.get('status', 'unknown')}"
+        print(f"{name}\tenabled={upstream.get('enabled', True)}\tstatus={record.get('status', 'unknown')}"
               f"\tfailures={record.get('consecutive_failures', 0)}\tlast_success={record.get('last_success')}"
               f"\tlast_probe={record.get('last_probe')}\terror={record.get('error')}"
               f"\tlatency_ms={record.get('latency_ms')}\tthroughput_bps={record.get('throughput_bps')}"
@@ -1799,14 +1812,26 @@ def command_subscription(args: argparse.Namespace) -> None:
                    if client["name"] == args.client and client.get("enabled", True)]
     try:
         content = vpn_subscriptions.subscription_text(state, args.client, local_links)
-        protected = {args.state.resolve(), args.config.resolve(), args.compose_file.resolve(),
-                     backup_path(args.state).resolve(), journal_path(args.state).resolve()}
-        if args.output.resolve() in protected:
+        try:
+            protected = protected_runtime_paths(args.state, args.config, args.compose_file)
+            output = args.output.resolve()
+        except (OSError, RuntimeError):
+            raise VpnctlError("cannot resolve subscription output or runtime paths") from None
+        if output in protected:
             raise VpnctlError("subscription output cannot overwrite state or runtime files")
         vpn_subscriptions.private_write(args.output, content)
     except ValueError as error:
         raise VpnctlError(str(error)) from None
     print(f"Private subscription written to {args.output}")
+
+
+def protected_runtime_paths(state_path: Path, config_path: Path, compose_file: Path) -> set[Path]:
+    paths = {state_path, config_path, compose_file}
+    for source in (state_path, config_path):
+        paths.update(source.with_name(source.name + suffix) for suffix in (
+            ".bak", ".v3.bak", ".deploy", ".candidate", ".pending", ".lock",
+        ))
+    return {path.resolve() for path in paths}
 
 
 def command_inventory(args: argparse.Namespace) -> None:
