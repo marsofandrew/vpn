@@ -10,7 +10,7 @@ The repo includes:
 
 Generated secrets and runtime config live under `data/` and are ignored by git.
 
-See [architecture](docs/ARCHITECTURE.md) for the v3 state contract and
+See [architecture](docs/ARCHITECTURE.md) for the historical v3 baseline and
 [reliability operations](docs/RELIABILITY.md) for atomic backups, recovery,
 accounting limits, image hardening, migration and rollback instructions.
 `render` and `--no-restart` now stage `data/config.json.pending`; apply desired
@@ -116,7 +116,8 @@ python3 vpnctl.py restart
 Each profile has an outbound route:
 
 - `direct`: exits to the internet from this VPS. This is the default and preserves the original behavior.
-- `proxy`: routes through a configured upstream VLESS + REALITY VPN link.
+- `proxy`: the legacy mode for forwarding through `main_vpn`. Named policies
+  also support forwarding through the configured TCP/REALITY or XHTTP upstreams.
 
 Create a proxy-only server:
 
@@ -151,7 +152,8 @@ python3 vpnctl.py upstream set --link 'NEW_VLESS_LINK_FROM_UPSTREAM_VPN'
 python3 vpnctl.py upstream clear
 ```
 
-`upstream clear` is allowed only when no profiles use `outbound=proxy`.
+`upstream clear` removes `main_vpn` only when no assigned policy references it.
+Use the [v4 guide](docs/SCHEMA_V4.md) for named upstreams and route assignments.
 
 ## Import Existing Xray Config
 
@@ -163,11 +165,18 @@ python3 vpnctl.py import-config \
   --server-host YOUR_SERVER_IP_OR_DOMAIN
 ```
 
-The config must contain VLESS + REALITY inbounds. If it has a VLESS + REALITY outbound used by routing rules, imported profiles using that route become `proxy`; other profiles become `direct`. Imported quotas are unlimited and usage counters start at zero. Pass `--default-domain DOMAIN` if imported client emails do not share one domain.
+The config must contain supported VLESS inbounds: TCP/REALITY, XHTTP/REALITY
+or XHTTP/TLS. Import preserves representable explicit routes and rejects
+unsupported or conditional routing instead of silently choosing a local exit.
+Imported quotas are unlimited and usage counters start at zero. Pass
+`--default-domain DOMAIN` if imported client emails do not share one domain.
 
 ## VPN Profiles
 
-A VPN profile is one VLESS + REALITY inbound. Each profile has its own public port, REALITY target, outbound route, private/public keypair, short ID, and client list. The rendered Xray config contains one inbound per profile.
+A VPN profile is one VLESS inbound with its own public port, route and client
+list. Default TCP/REALITY profiles also hold a REALITY target, keypair and short
+ID. XHTTP profiles use the transport/security settings described in the v4 guide.
+The rendered Xray config contains one inbound per profile.
 
 List profiles:
 

@@ -2,7 +2,9 @@
 
 ## Behavior changes
 
-State remains v3. Existing client UUIDs, keys, short IDs, ports, routing and
+The current state schema is v4; the reliability milestone originally retained
+v3 before the preserving migration described in SCHEMA_V4.md. Client UUIDs,
+keys, short IDs, ports, routing and
 quotas are retained. Optional `accounting` contains `epoch` (container ID,
 StartedAt, running status) and cumulative `checkpoints` by client email and
 uplink/downlink direction. Totals and checkpoints are committed together.
@@ -28,7 +30,8 @@ If the installation is intentionally root-managed, keep the units and all CLI
 commands under root instead. Do not alternate root and unprivileged writers.
 
 Files are atomically replaced with mode 0600 and fsync. A validated previous
-state is kept at `.bak`; missing or corrupt primary state recovers from it.
+state is kept at `.bak`; missing or syntactically corrupt primary state recovers
+from it. Semantic validation failures are rejected without restoring an older state.
 The backup can be one update behind, so recovery is reported on stderr.
 Temporary files left by SIGKILL are ignored, never used as authoritative state.
 Use an access-controlled filesystem; the Docker socket remains root-equivalent.
@@ -58,8 +61,9 @@ NET_BIND_SERVICE; root filesystem is read-only and new privileges are disabled.
 Host networking remains required on Linux. The API listens only on 127.0.0.1.
 Access logging is disabled; warning/error output goes to Docker's logs. Explicit
 link/init/client-add commands intentionally print connection credentials; do not
-send their output to shared logs. QR files are mode 0600. No certificates or
-subscription service are introduced.
+send their output to shared logs. QR files are mode 0600. TLS profiles use
+operator-provided certificates; no certificate provisioning or subscription
+hosting service is implemented.
 
 ## Accounting guarantees and limitations
 
@@ -124,13 +128,14 @@ running container, force recreation, live statistics reads and injected health
 failure rollback. It does not establish a client REALITY session, measure real
 traffic/quota cutoff or establish accessibility from Russian networks.
 
-Local evidence: 28 baseline tests passed; final validation passed 47 unit tests
+Historical PR 1 evidence: 28 baseline tests passed; that milestone passed 47 unit tests
 and the Docker integration test, Python compilation, shell syntax, Compose
 validation and diff whitespace checks. The official GHCR image pull returned
-403 in this environment; local runtime checks use the same Xray 25.3.6 binary in
+403 in that environment; those historical runtime checks used the Xray 25.3.6 binary in
 `teddysun/xray:25.3.6` (digest
 `sha256:3e37257dbd81dd07f5b71c13228f4b3f0feec21349531eb48650cfaf8393de91`)
-with an explicit xray entrypoint. This is a test override only; production Compose
-continues using the official image. Repeat the integration test against GHCR
-before deployment. The reference repository was reviewed for context only; its
+with an explicit xray entrypoint. This is historical evidence, not current-image
+validation or an allowed substitute for it. Compose and current integration
+defaults use the official 26.10.31 image. See VALIDATION.md for current results
+and repeat official-image integration before deployment. The reference repository was reviewed for context only; its
 rotation/provisioning code is not included.

@@ -20,10 +20,12 @@ XHTTP profiles carry security settings separately; TLS server certificates are
 explicit paths supplied by the operator. No certificates are generated or
 deployed during migration.
 
-Policies support explicit direct, upstream and block routes initially. Each
-proxy policy selects an enabled upstream by stable ID; removing/disabling a
-referenced upstream is rejected. Health-based policies are introduced in the
-next tagged milestone. No proxy route falls back to direct automatically.
+Policies support direct, upstream, block, priority and balanced routes. An
+upstream policy selects one enabled upstream by stable ID. Priority and balanced
+policies select among health-checked members as described in HEALTH_ROUTING.md.
+An upstream cannot be removed while assigned; disabling a member of a dynamic
+policy is permitted and makes it ineligible. No proxy route falls back to direct
+automatically.
 
 Unknown state versions, unsupported imported transports/security and unknown
 route targets are rejected. Import must not silently translate an unsupported

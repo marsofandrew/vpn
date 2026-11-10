@@ -43,7 +43,7 @@ host patch guidance during the later operator rollout.
   All 35 transport tests passed with `XRAY_BINARY`, including native generated
   configuration checks. This verifies the binary, not the container image.
 - Ruff lint and new-module formatting checks, targeted mypy checks, Python
-  compilation, shell syntax, workflow YAML parsing and Compose parsing passed.
+  compilation, shell syntax and Compose parsing passed.
 - Python runtime dependency audit: no known vulnerabilities reported by
   pip-audit against requirements.txt at the time of the check.
 - Before the official-image-only update, the complete 215-test suite passed
@@ -77,8 +77,8 @@ docker run --rm aquasec/trivy:0.61.1 image --scanners vuln --severity HIGH,CRITI
 
 Integration tests create temporary local fixtures and containers; port 10085
 must be free. Formatting/type checks cover the new modules; legacy CLI style is
-preserved. CI runs unit/migration/native/runtime checks, Compose validation and
-dependency/image audits. Security findings fail the gate; none are suppressed.
-CI was added locally and has not been run on GitHub because nothing was pushed.
+preserved. Validation is manual: no GitHub Actions workflow is configured.
+The commands above run unit/migration/native/runtime checks, Compose validation
+and dependency/image audits locally. Security findings are not suppressed.
 Do not deploy until the official-image gate and the documented staged network
 checks pass. No full multi-node orchestration or CGNAT tunnel is implemented.
