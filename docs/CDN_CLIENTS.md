@@ -50,7 +50,10 @@ python3 vpnctl.py subscription phone --output data/subscriptions/phone.txt
 The file is a standard base64 subscription of enabled local matching client
 links plus explicitly registered remote entries. It is atomically written mode
 0600; base64 is encoding, not encryption. Treat the file as credentials and
-transfer it securely. The normal export log contains only its output path.
+transfer it securely. Export rejects paths resolving to state/configuration,
+their backups (including the original v3 snapshot), journals, candidate/pending
+files and locks, including aliases through symlinks.
+The normal export log contains only its output path.
 No subscription HTTP host is implemented. Do not publish these files through an
 unauthenticated web directory. A future hosting layer needs authenticated access
 or strong unguessable tokens and TLS. Client applications must select/reconnect

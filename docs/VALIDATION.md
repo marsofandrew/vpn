@@ -33,10 +33,10 @@ The official release source and security notes are at
 An image upgrade does not update or secure the host kernel; follow upstream
 host patch guidance during the later operator rollout.
 
-## Evidence and outstanding checks (2026-11-09)
+## Historical evidence (2026-11-09)
 
 - Baseline: 28 existing unit tests passed before PR 1.
-- Current standard suite: 215 tests discovered, 200 passed and 15 opt-in
+- At that checkpoint: 215 tests discovered, 200 passed and 15 opt-in
   integration checks skipped without integration flags.
 - Official 26.10.31 macOS ARM64 release binary: its ZIP matched the published
   SHA256 `0a05dca3bd311b0bc5a89c7ce56350cab1e829e131e4b2bcd48eb304fac07e9a`.
@@ -60,13 +60,53 @@ host patch guidance during the later operator rollout.
   accessibility in Saint Petersburg, Moscow and Berezniki remain untested.
   Server-side success does not establish Russian client accessibility.
 
+## Stabilization checks (2026-11-10)
+
+- Standard suite: 261 tests discovered, 244 passed and 17 opt-in integration
+  checks skipped. The helper tests include an actual loopback fault-proxy test;
+  local socket binding must be permitted by the execution environment.
+- The official 26.10.31 binary again passed all 35 transport tests. Ruff lint,
+  new-module formatting, targeted mypy checks, Python compilation, shell syntax
+  and the resolved default Compose configuration-mount check passed.
+- Regression coverage now includes malformed state and legacy structures,
+  semantic errors without backup fallback, secret-free validation errors,
+  subscription artifact/symlink protection, unverified probe observations,
+  ECH probe version mismatches and pre-install/recovery mount mismatches.
+- Two new Linux integration scenarios exercise actual gateway-to-exit traffic,
+  usage polling, restart checkpoints, quota cutoff, routing changes, primary
+  failure, both paths unavailable and recovery cooldown. Their fixture helpers
+  passed five local checks, but the actual Docker traffic scenarios have not run.
+- An explicit request for the new scenarios on this macOS host reported the
+  Linux/local-host-network prerequisite as a skip, not a passed acceptance check.
+  The official image was not cached, and its pull again returned GHCR HTTP 403.
+  Official container runtime, ECH regressions and image scanning remain blocked.
+- No alternate image was used. No `stabilization-local-v1` acceptance tag was
+  created. Dedicated REALITY authentication and rejected-credential tests remain
+  deferred; valid REALITY traffic is only part of the chaining scenario.
+- CI has been removed. Development dependencies and manual validation commands
+  remain available. No production changes or remote pushes were performed.
+
+The new integration fixture uses a temporary trusted CA and a fixture-only
+native `useSystemCA` setting for TLS outbounds. Certificate verification stays
+enabled; production rendering and the host trust store are unchanged. It also
+retains private file modes, read-only mounts and capability restrictions. Linux
+bind-mount ownership/readability remains part of the pending runtime check.
+
+Run the new scenarios on native Linux with a local Docker daemon and port 10085
+free. An unavailable official image produces an error without trying another
+publisher:
+
+```sh
+XRAY_INTEGRATION=1 python3 -m unittest discover -s tests -p test_stabilization_integration.py -v
+```
+
 ## Repeatable checks
 
 ```sh
 python3 -m pip install -r requirements-dev.txt
 ruff check --select F,E9 .
 ruff format --check vpn_*.py
-mypy --ignore-missing-imports vpn_transports.py vpn_health.py vpn_monitor.py vpn_subscriptions.py vpn_inventory.py
+mypy --ignore-missing-imports vpn_transports.py vpn_health.py vpn_monitor.py vpn_subscriptions.py vpn_inventory.py vpn_validation.py
 python3 -m unittest discover -s tests -v
 docker compose config -q
 docker pull ghcr.io/xtls/xray-core:26.10.31

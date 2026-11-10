@@ -32,13 +32,19 @@ commands under root instead. Do not alternate root and unprivileged writers.
 Files are atomically replaced with mode 0600 and fsync. A validated previous
 state is kept at `.bak`; missing or syntactically corrupt primary state recovers
 from it. Semantic validation failures are rejected without restoring an older state.
+Required state sections and nested field types are checked before use, with
+controlled errors that do not echo authentication values. A backup is validated
+before it is archived or installed during recovery.
 The backup can be one update behind, so recovery is reported on stderr.
 Temporary files left by SIGKILL are ignored, never used as authoritative state.
 Use an access-controlled filesystem; the Docker socket remains root-equivalent.
 
 Changed runtime configurations undergo tag/reference checks and native Xray
 validation using a **separate candidate mount**. A journal records the previous
-state/config before installation. Force recreation ensures file bind mounts see
+state/config before installation. Resolved Compose settings must bind the
+requested configuration read-only at `/etc/xray/config.json`; installation and
+recovery reject mismatched, missing or ambiguous mounts before writing files.
+Force recreation ensures file bind mounts see
 the new inode. API availability, TCP listeners and a stable container epoch are
 checked; failure restores the previous config and recreates it. An interrupted
 transaction is rolled back before the next CLI command, using the same paths.

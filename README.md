@@ -380,3 +380,9 @@ Run the standard-library test suite:
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+The local suite needs loopback socket access for its fault-proxy helper.
+Official-image traffic and host-network monitoring checks are opt-in; the new
+stabilization scenarios require native Linux and do not substitute another image
+when GHCR is unavailable. See [validation status](docs/VALIDATION.md) for exact
+commands, passed checks and remaining acceptance blockers. No CI is configured.

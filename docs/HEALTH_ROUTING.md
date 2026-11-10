@@ -23,7 +23,11 @@ operators must choose trusted, stable endpoints and expected egress addresses.
 Setup failures never expose credentials or full command output.
 
 Three consecutive successes/failures are the starting thresholds, configurable
-per path. Probes default to a 30-second minimum interval. The installed optional
+per path. A success must explicitly include verified exit-IP evidence; an
+unverified success counts as a failed observation without bypassing hysteresis.
+ECH probe containers must report the pinned Xray version before sending probe
+traffic; failure reports a safe error and still cleans up the temporary instance.
+Probes default to a 30-second minimum interval. The installed optional
 timer waits 30 seconds after a complete cycle, so actual cadence includes probe
 duration and state-lock contention. Probes are sequential and share the CLI lock
 with quota/manual operations; this favors coherent route/state updates over
