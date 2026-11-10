@@ -29,6 +29,9 @@ def default_client(state):
 
 class VpnctlTests(unittest.TestCase):
     def setUp(self) -> None:
+        mount_patch = patch.object(vpnctl, "validate_config_mount")
+        mount_patch.start()
+        self.addCleanup(mount_patch.stop)
         health_patch = patch.object(vpnctl, "verify_xray")
         health_patch.start()
         self.addCleanup(health_patch.stop)

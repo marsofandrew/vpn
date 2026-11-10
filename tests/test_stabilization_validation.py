@@ -59,6 +59,14 @@ class StabilizationValidationTests(unittest.TestCase):
             vpnctl.validate_outbound_mode("vless://secret-authentication@example.com")
         self.assertNotIn("secret-authentication", str(failure.exception))
 
+    def test_invalid_xhttp_link_data_has_a_controlled_error(self):
+        profile = self.state["profiles"][0]
+        profile["transport"] = {"type": "xhttp", "settings": {"path": "/", "mode": "stream-one"}}
+        profile["clients"][0]["id"] = "private-invalid-identity"
+        with self.assertRaises(vpnctl.VpnctlError) as failure:
+            vpnctl.generate_vless_link(profile["clients"][0], self.state, profile)
+        self.assertNotIn("private-invalid-identity", str(failure.exception))
+
     def test_subscription_cannot_replace_runtime_artifacts_or_symlinks(self):
         paths = vpnctl.protected_runtime_paths(self.state_path, self.config_path, self.compose)
         for index, target in enumerate(sorted(paths)):

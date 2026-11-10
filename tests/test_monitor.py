@@ -28,6 +28,7 @@ class MonitorTests(unittest.TestCase):
             "expected_exit_ips": ["203.0.113.7"],
         }
         self.transport = types.ModuleType("vpn_transports")
+        self.transport.PINNED_XRAY_VERSION = "26.10.31"
         self.outbound = {"tag": "probe_exit", "protocol": "vless",
                          "settings": {"credential": "SECRET-CREDENTIAL"}}
         self.transport.render_outbound = Mock(return_value=self.outbound)
@@ -39,6 +40,8 @@ class MonitorTests(unittest.TestCase):
         self.listener.getsockname.return_value = ("127.0.0.1", 45678)
         self.connect = self.mock("socket.create_connection")
         self.docker = self.mock("subprocess.run")
+        self.docker.return_value = subprocess.CompletedProcess(
+            [], 0, stdout="Xray 26.10.31 (Xray, Penetrates Everything.)\n", stderr="")
         self.probe = self.mock("vpn_health.probe_path")
         self.health_result = {"success": True, "error": None,
                               "exit_ip_verified": True, "latency_ms": 12.5}
@@ -83,11 +86,19 @@ class MonitorTests(unittest.TestCase):
 
     def assert_cleaned(self):
         self.assertTrue(self.names)
-        self.assertEqual(self.docker.call_count, len(self.names))
-        for call, name in zip(self.docker.call_args_list, self.names):
+        cleanup_calls = [call for call in self.docker.call_args_list
+                         if call.args[0][:3] == ["docker", "rm", "-f"]]
+        self.assertEqual(len(cleanup_calls), len(self.names))
+        for call, name in zip(cleanup_calls, self.names):
             self.assertEqual(call.args, (["docker", "rm", "-f", name],))
             self.assertEqual(call.kwargs, {"check": True, "stdout": subprocess.DEVNULL,
                                           "stderr": subprocess.DEVNULL, "timeout": 10})
+        for call in self.docker.call_args_list:
+            if call not in cleanup_calls:
+                self.assertIn(call.args[0][2], self.names)
+                self.assertEqual(call.args, (["docker", "exec", call.args[0][2], "xray", "version"],))
+                self.assertEqual(call.kwargs, {"check": True, "capture_output": True,
+                                              "text": True, "timeout": min(self.settings.get("timeout", 15), 10)})
         self.assertTrue(all(not path.exists() for path in self.files))
         self.assertEqual(list(self.directory.iterdir()), [])
 
@@ -107,7 +118,73 @@ class MonitorTests(unittest.TestCase):
             "127.0.0.1", 45678, self.settings["download_url"], self.settings["egress_url"],
             self.settings["expected_exit_ips"], bytes_required=131072, timeout=15)
         self.assertEqual((self.upstream, self.settings), before)
+        self.assertEqual(self.docker.call_count, 1)
         self.assert_cleaned()
+
+    def test_ech_checks_pinned_runtime_before_any_probe_traffic(self):
+        self.upstream["security"] = {"type": "tls", "settings": {"ech_config_list": "ECH-CONFIG"}}
+        self.settings["timeout"] = 4.5
+
+        def docker(args, **kwargs):
+            if args[1] == "exec":
+                self.connect.assert_not_called()
+                self.probe.assert_not_called()
+                self.assertTrue(self.files[-1].exists())
+            else:
+                self.probe.assert_called_once()
+            return subprocess.CompletedProcess(args, 0, stdout="Xray 26.10.31 (Xray)\n")
+
+        self.docker.side_effect = docker
+        self.assertEqual(self.call(), self.health_result)
+        self.assertEqual(self.docker.call_count, 2)
+        self.assert_cleaned()
+
+    def test_ech_runtime_mismatch_or_missing_banner_fails_closed_and_cleans_up(self):
+        self.upstream["security"] = {"type": "tls", "settings": {"ech_config_list": "ECH-CONFIG"}}
+        for banner in ("Xray 26.10.30 (Xray)", "Xray 26.10.310 (Xray)",
+                       "Xray 26.10.31-custom (Xray)", "Xray 26x10x31 (Xray)",
+                       "version 26.10.31", "Xray 126.10.31 (Xray)", "", None,
+                       "SECRET-CREDENTIAL"):
+            with self.subTest(banner=banner):
+                self.docker.return_value = subprocess.CompletedProcess([], 0, stdout=banner)
+                self.assertEqual(self.call(), {"success": False, "error": "runtime_version_mismatch",
+                                              "exit_ip_verified": False})
+                self.connect.assert_not_called()
+                self.probe.assert_not_called()
+                self.assert_cleaned()
+
+    def test_ech_version_command_failure_or_timeout_cleans_up(self):
+        self.upstream["security"] = {"type": "tls", "settings": {"ech_config_list": "ECH-CONFIG"}}
+        for error in (subprocess.CalledProcessError(1, "docker", stderr="SECRET-CREDENTIAL"),
+                      subprocess.TimeoutExpired("SECRET-CREDENTIAL", 10),
+                      OSError("SECRET-CREDENTIAL")):
+            with self.subTest(error=type(error)):
+                def docker(args, **kwargs):
+                    if args[1] == "exec":
+                        raise error
+                    return subprocess.CompletedProcess(args, 0)
+
+                self.docker.side_effect = docker
+                self.assertEqual(self.call()["error"], "runtime_version_mismatch")
+                self.connect.assert_not_called()
+                self.probe.assert_not_called()
+                self.assert_cleaned()
+
+    def test_ech_version_failure_survives_cleanup_failure(self):
+        self.upstream["security"] = {"type": "tls", "settings": {"ech_config_list": "ECH-CONFIG"}}
+        self.docker.side_effect = OSError("SECRET-CREDENTIAL")
+        self.assertEqual(self.call()["error"], "runtime_version_mismatch")
+        self.probe.assert_not_called()
+        self.assert_cleaned()
+
+    def test_empty_or_missing_ech_configuration_skips_runtime_check(self):
+        for security in ({}, {"type": "tls", "settings": {}},
+                         {"type": "tls", "settings": {"ech_config_list": ""}}):
+            with self.subTest(security=security):
+                self.upstream["security"] = security
+                self.assertEqual(self.call(), self.health_result)
+                self.assertEqual(self.docker.call_count, len(self.names))
+                self.assert_cleaned()
 
     def test_explicit_measurement_settings(self):
         self.settings.update(bytes_required=262144, timeout=4.5)

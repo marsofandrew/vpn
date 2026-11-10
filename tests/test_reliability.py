@@ -22,6 +22,9 @@ def increment_state(path, ready):
 
 class ReliabilityTests(unittest.TestCase):
     def setUp(self):
+        mount_patch = patch.object(vpnctl, "validate_config_mount")
+        mount_patch.start()
+        self.addCleanup(mount_patch.stop)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.state_path = Path(directory.name) / "state.json"

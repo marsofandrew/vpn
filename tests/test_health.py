@@ -20,7 +20,7 @@ class StateTests(unittest.TestCase):
             with self.subTest(success=success):
                 state = {}
                 for n in range(1, 4):
-                    state = health.record_probe(state, {"success": success}, n * 30, {})
+                    state = health.record_probe(state, {"success": success, "exit_ip_verified": True}, n * 30, {})
                     self.assertEqual(state[counter], n)
                     expected = "unknown" if n < 3 else ("healthy" if success else "unhealthy")
                     self.assertEqual(state["status"], expected)
@@ -31,7 +31,7 @@ class StateTests(unittest.TestCase):
     def test_hysteresis_and_recovery_timestamp(self):
         state = {}
         for now in [0, 30, 60]:
-            state = health.record_probe(state, {"success": True}, now, {})
+            state = health.record_probe(state, {"success": True, "exit_ip_verified": True}, now, {})
         for now in [90, 120]:
             state = health.record_probe(state, {"success": False}, now, {})
             self.assertEqual(state["status"], "healthy")
@@ -41,18 +41,18 @@ class StateTests(unittest.TestCase):
         self.assertIsNone(state["restored_at"])
         self.assertEqual(state["last_success"], 60)
         for now in [180, 210]:
-            state = health.record_probe(state, {"success": True}, now, {})
+            state = health.record_probe(state, {"success": True, "exit_ip_verified": True}, now, {})
             self.assertEqual(state["status"], "unhealthy")
-        state = health.record_probe(state, {"success": True}, 240, {})
+        state = health.record_probe(state, {"success": True, "exit_ip_verified": True}, 240, {})
         self.assertEqual(state["status"], "healthy")
         self.assertEqual(state["restored_at"], 240)
-        state = health.record_probe(state, {"success": True}, 270, {})
+        state = health.record_probe(state, {"success": True, "exit_ip_verified": True}, 270, {})
         self.assertEqual(state["restored_at"], 240)
 
     def test_opposite_result_resets_streaks(self):
         state = {}
         for now, success in enumerate([True, True, False, False, True, False, True]):
-            state = health.record_probe(state, {"success": success}, now, {})
+            state = health.record_probe(state, {"success": success, "exit_ip_verified": True}, now, {})
             self.assertEqual(state["status"], "unknown")
         self.assertEqual(state["consecutive_failures"], 0)
         self.assertEqual(state["consecutive_successes"], 1)
@@ -78,11 +78,56 @@ class StateTests(unittest.TestCase):
         self.assertIsNone(failed["latency_ms"])
 
     def test_latest_result_is_recorded_even_before_advisory_due_time(self):
-        state = health.record_probe({}, {"success": True}, 10, {})
+        state = health.record_probe({}, {"success": True, "exit_ip_verified": True}, 10, {})
         state = health.record_probe(state, {"success": False}, 11, {})
         self.assertEqual(state["last_probe"], 11)
         self.assertEqual(state["next_probe_at"], 41)
         self.assertEqual(state["consecutive_failures"], 1)
+
+    def test_unverified_positive_cannot_become_healthy(self):
+        for verification in ({}, {"exit_ip_verified": False}, {"exit_ip_verified": None},
+                             {"exit_ip_verified": 1}, {"exit_ip_verified": "true"}):
+            with self.subTest(verification=verification):
+                result = {"success": True, "error": "SECRET-CREDENTIAL", **verification}
+                before = copy.deepcopy(result)
+                state = health.record_probe({}, result, 10, {"success_threshold": 1})
+                self.assertEqual(state["status"], "unknown")
+                self.assertFalse(state["success"])
+                self.assertFalse(state["exit_ip_verified"])
+                self.assertEqual(state["error"], "exit_ip_unverified")
+                self.assertEqual(state["consecutive_failures"], 1)
+                self.assertEqual(state["consecutive_successes"], 0)
+                self.assertIsNone(state["last_success"])
+                self.assertIsNone(state["restored_at"])
+                self.assertEqual(result, before)
+
+    def test_unverified_positives_preserve_health_until_failure_threshold(self):
+        for verification in ({}, {"exit_ip_verified": False}):
+            with self.subTest(verification=verification):
+                state = {}
+                for now in (0, 30, 60):
+                    state = health.record_probe(
+                        state, {"success": True, "exit_ip_verified": True}, now, {})
+                for now, failures in ((90, 1), (120, 2), (150, 3)):
+                    previous = copy.deepcopy(state)
+                    state = health.record_probe(state, {"success": True, **verification}, now, {})
+                    self.assertEqual(state["status"], "healthy" if failures < 3 else "unhealthy")
+                    self.assertEqual(state["restored_at"], 60 if failures < 3 else None)
+                    self.assertEqual(state["consecutive_failures"], failures)
+                    self.assertEqual(state["consecutive_successes"], 0)
+                    self.assertEqual(state["last_success"], 60)
+                    self.assertEqual(state["last_probe"], now)
+                    self.assertEqual(state["next_probe_at"], now + 30)
+                    self.assertEqual(state["error"], "exit_ip_unverified")
+                    if failures < 3:
+                        self.assertEqual(previous["restored_at"], state["restored_at"])
+                state = health.record_probe(state, {"success": True, **verification}, 180, {})
+                self.assertEqual(state["status"], "unhealthy")
+                self.assertEqual(state["consecutive_successes"], 0)
+
+    def test_runtime_version_failure_code_is_preserved(self):
+        state = health.record_probe({}, {"success": False, "error": "runtime_version_mismatch"}, 10, {})
+        self.assertEqual(state["error"], "runtime_version_mismatch")
 
     def test_invalid_config_and_out_of_order_observations(self):
         for config in [{"interval": -1}, {"fail_threshold": 0}, {"success_threshold": 1.5},
@@ -96,7 +141,7 @@ class StateTests(unittest.TestCase):
             health.record_probe({"last_probe": 11}, {}, 10, {})
 
     def test_only_boolean_success_counts_and_invalid_measurements_are_discarded(self):
-        result = {"success": "yes", "latency_ms": math.nan, "throughput_bps": -1,
+        result = {"success": "yes", "exit_ip_verified": True, "latency_ms": math.nan, "throughput_bps": -1,
                   "error": "secret URL and token", "body_bytes": True, "status_code": 999}
         state = health.record_probe({}, result, 10, {})
         self.assertFalse(state["success"])
@@ -152,7 +197,7 @@ class RouteTests(unittest.TestCase):
     def test_repeated_success_does_not_postpone_switchback(self):
         state = {}
         for now in [0, 30, 60, 90]:
-            state = health.record_probe(state, {"success": True}, now, {})
+            state = health.record_probe(state, {"success": True, "exit_ip_verified": True}, now, {})
         self.health["a"] = state
         policy = {"type": "priority", "upstreams": ["a", "b"], "current_upstream": "b", "cooldown": 60}
         self.assertEqual(health.select_route(policy, self.upstreams, self.health, 119), "b")
@@ -164,6 +209,16 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.select("balanced"), "a")
         self.upstreams["a"]["enabled"] = False
         self.assertEqual(self.select("balanced"), "c")
+
+    def test_unverified_positives_preserve_switchback_cooldown_until_failure_threshold(self):
+        state = {"status": "healthy", "restored_at": 60, "last_success": 60,
+                 "consecutive_successes": 3}
+        policy = {"type": "priority", "upstreams": ["a", "b"],
+                  "current_upstream": "b", "cooldown": 60}
+        for now, expected in ((119, "b"), (120, "a"), (121, "b")):
+            state = health.record_probe(state, {"success": True, "exit_ip_verified": False}, now, {})
+            self.health["a"] = state
+            self.assertEqual(health.select_route(policy, self.upstreams, self.health, now), expected)
 
     def test_balanced_ties_and_missing_or_invalid_latency_are_deterministic(self):
         for value in [None, math.nan, math.inf, -1, "fast", True]:

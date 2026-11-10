@@ -10,6 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import tempfile
@@ -23,6 +24,16 @@ __all__ = ["probe_upstream"]
 
 def _failure(code):
     return {"success": False, "error": code, "exit_ip_verified": False}
+
+
+def _runtime_version_matches(banner, version):
+    return (
+        isinstance(banner, str)
+        and re.search(
+            r"^Xray[ \t]+" + re.escape(version) + r"(?=\s|$)", banner, re.MULTILINE
+        )
+        is not None
+    )
 
 
 def _wait_bound(port, timeout):
@@ -138,6 +149,19 @@ def probe_upstream(upstream, settings, compose_file, config_dir, run_compose) ->
         if completed.returncode != 0:
             result = _failure(error_code)
         else:
+            if upstream.get("security", {}).get("settings", {}).get("ech_config_list"):
+                error_code = "runtime_version_mismatch"
+                completed = subprocess.run(
+                    ["docker", "exec", container_name, "xray", "version"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=min(timeout, 10),
+                )
+                if not _runtime_version_matches(
+                    completed.stdout, vpn_transports.PINNED_XRAY_VERSION
+                ):
+                    return _failure(error_code)
             error_code = "probe_start_timeout"
             if not _wait_bound(port, timeout):
                 result = _failure(error_code)

@@ -1,4 +1,4 @@
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import tempfile
 import unittest
@@ -42,6 +42,18 @@ class RoutingHealthTests(unittest.TestCase):
 
     def selected(self, state):
         return state["routing_policies"]["foreign"].get("current_upstream")
+
+    def test_invalid_health_observation_state_has_a_controlled_error(self):
+        self.state["health"] = {"ny-direct": {"status": "invalid"}}
+        vpnctl.save_state(self.path, self.state)
+        previous = self.path.read_bytes()
+        output = StringIO()
+        with redirect_stderr(output), patch.object(vpnctl.vpn_monitor, "probe_upstream", return_value={"success": True, "exit_ip_verified": True}):
+            result = vpnctl.main(["--state", str(self.path), "--config", str(self.config), "health", "check", "--no-restart"])
+        self.assertEqual(result, 1)
+        self.assertIn("invalid health status", output.getvalue())
+        self.assertNotIn("Traceback", output.getvalue())
+        self.assertEqual(self.path.read_bytes(), previous)
 
     def test_loss_recovery_hysteresis_cooldown_and_both_failed(self):
         for _ in range(3):

@@ -17,6 +17,7 @@ Public API (no persistence, scheduling, routing changes, or default probe URLs):
   ``success_threshold`` (3). ``cooldown`` (60) is validated here and supplied
   separately to priority policies by the orchestrator. Status starts unknown;
   consecutive results transition it to healthy/unhealthy at the thresholds.
+  Success requires both success and exit_ip_verified to be exactly True.
   ``restored_at`` marks each transition to healthy, not each successful probe.
   ``next_probe_at`` is advisory: callers schedule probes and pass ordered
   timestamps; every call records an actual observation, even within interval.
@@ -92,6 +93,8 @@ _ERROR_CODES = frozenset(
         "body_too_short",
         "invalid_egress_response",
         "exit_ip_mismatch",
+        "exit_ip_unverified",
+        "runtime_version_mismatch",
         "probe_failed",
         "compose_config_failed",
         "host_network_required",
@@ -189,7 +192,9 @@ def record_probe(previous: dict, result: dict, now: float, config: dict) -> dict
     status = previous.get("status", "unknown")
     if status not in ("unknown", "healthy", "unhealthy"):
         raise ValueError("invalid health status")
-    success = result.get("success") is True
+    verified = result.get("exit_ip_verified") is True
+    unverified = result.get("success") is True and not verified
+    success = result.get("success") is True and verified
     failures = (
         0
         if success
@@ -216,12 +221,14 @@ def record_probe(previous: dict, result: dict, now: float, config: dict) -> dict
         "restored_at": restored_at,
         "error": None
         if success
+        else "exit_ip_unverified"
+        if unverified
         else (
             result.get("error")
             if isinstance(result.get("error"), str) and result["error"] in _ERROR_CODES
             else "probe_failed"
         ),
-        "exit_ip_verified": result.get("exit_ip_verified") is True,
+        "exit_ip_verified": verified,
     }
     for key in _METRICS:
         try:

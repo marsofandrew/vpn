@@ -1178,7 +1178,10 @@ def generate_vless_link(client: dict[str, Any], state: dict[str, Any], profile: 
         endpoint = {"protocol": "vless", "address": state["server_host"].strip("[]"),
                     "port": profile["port"], "auth": {"id": client["id"], "encryption": "none", "flow": ""},
                     "transport": profile["transport"], "security": security, "enabled": True}
-        return vpn_transports.export_link(endpoint, f"{profile_label(profile)}:{client['name']}")
+        try:
+            return vpn_transports.export_link(endpoint, f"{profile_label(profile)}:{client['name']}")
+        except ValueError as error:
+            raise VpnctlError(str(error)) from None
     reality_host, _ = split_host_port(profile["reality_target"])
     server_host = validate_server_host(state["server_host"])
     params = {
@@ -1331,6 +1334,28 @@ def validate_native(compose_file: Path, candidate_path: Path) -> None:
         raise VpnctlError("ECH requires the tested pinned Xray version; check XRAY_IMAGE")
 
 
+def validate_config_mount(compose_file: Path, config_path: Path) -> None:
+    completed = run_compose(compose_file, ["config", "--format", "json"], capture=True)
+    try:
+        resolved = json.loads(completed.stdout)
+        volumes = resolved["services"][XRAY_SERVICE]["volumes"]
+        if not isinstance(volumes, list) or any(not isinstance(volume, dict) for volume in volumes):
+            raise ValueError
+        mounts = [volume for volume in volumes if volume.get("target") == "/etc/xray/config.json"]
+        if len(mounts) != 1:
+            raise ValueError
+        mount = mounts[0]
+        if mount.get("type") != "bind" or mount.get("read_only") is not True or not isinstance(mount.get("source"), str) or not mount["source"]:
+            raise ValueError
+        source = Path(mount["source"])
+        if not source.is_absolute():
+            source = compose_file.resolve().parent / source
+        if source.resolve() != config_path.resolve():
+            raise ValueError
+    except (KeyError, TypeError, ValueError, OSError, RuntimeError):
+        raise VpnctlError("Xray must bind the requested configuration read-only at /etc/xray/config.json") from None
+
+
 def verify_xray(compose_file: Path, config: dict[str, Any]) -> None:
     deadline = time.monotonic() + 15
     while True:
@@ -1364,6 +1389,7 @@ def recover_deployment(state_path: Path, config_path: Path, compose_file: Path) 
     if journal.get("config_path", str(config_path.resolve())) != str(config_path.resolve()) or \
             journal.get("compose_file", str(compose_file.resolve())) != str(compose_file.resolve()):
         raise VpnctlError("Recovery requires the original --config and --compose-file paths")
+    validate_config_mount(compose_file, config_path)
     if journal["config"] is None:
         run_compose(compose_file, ["stop", XRAY_SERVICE], capture=True)
         config_path.unlink(missing_ok=True)
@@ -1387,11 +1413,13 @@ def deploy_config(state: dict[str, Any], state_path: Path, config_path: Path,
         if not force:
             raise
         previous_config = load_json(backup_path(config_path)) if backup_path(config_path).exists() else None
-    if previous_config is not None:
-        os.chmod(config_path, 0o600)
     if previous_config == candidate and not force:
+        os.chmod(config_path, 0o600)
         save_state(state_path, state)
         return
+    validate_config_mount(compose_file, config_path)
+    if previous_config is not None:
+        os.chmod(config_path, 0o600)
     candidate_path = config_path.with_name(config_path.name + ".candidate")
     write_json(candidate_path, candidate)
     try:
@@ -1761,7 +1789,10 @@ def command_health(args: argparse.Namespace) -> None:
             if not upstream.get("enabled", True) or not settings or health.get(name, {}).get("next_probe_at", 0) > now:
                 continue
             result = vpn_monitor.probe_upstream(upstream, settings, args.compose_file, args.config.parent, run_compose)
-            health[name] = vpn_health.record_probe(health.get(name, {}), result, time.time(), settings)
+            try:
+                health[name] = vpn_health.record_probe(health.get(name, {}), result, time.time(), settings)
+            except ValueError as error:
+                raise VpnctlError(str(error)) from None
         events = []
         for name, policy in state["routing_policies"].items():
             if policy["type"] not in {"priority", "balanced"}:
