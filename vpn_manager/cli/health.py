@@ -1,127 +1,58 @@
-import argparse
-import ipaddress
-import math
-import time
-from urllib.parse import urlparse
+"""Adapt health CLI input and format health status output."""
 
-import vpn_health
-import vpn_monitor
-from vpn_manager import clock as app_clock
-from vpn_manager import errors as app_errors
-from vpn_manager import values as app_values
-from vpn_manager.state import storage as app_state_storage
-from vpn_manager.xray import deployment as app_xray_deployment
-from vpn_manager.xray import runtime as app_xray_runtime
+from vpn_manager.health.service import configure_probe
 
 
-def command_health(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
-    operation = args.health_command
-    if operation == "configure":
-        if args.name not in state["upstreams"]:
-            raise app_errors.VpnctlError("unknown upstream")
-        if (
-            not math.isfinite(args.interval)
-            or not math.isfinite(args.timeout)
-            or args.interval <= 0
-            or args.fail_threshold <= 0
-            or args.success_threshold <= 0
-            or args.timeout <= 0
-        ):
-            raise app_errors.VpnctlError(
-                "probe intervals, thresholds and timeout must be positive"
-            )
-        try:
-            for value in (args.download_url, args.egress_url):
-                endpoint = urlparse(value)
-                if (
-                    endpoint.scheme != "https"
-                    or not endpoint.hostname
-                    or endpoint.username
-                    or endpoint.password
-                    or endpoint.fragment
-                ):
-                    raise ValueError
-                if endpoint.port is not None:
-                    app_values.parse_port(endpoint.port)
-            for address in args.expected_exit_ip:
-                ipaddress.ip_address(address)
-        except (ValueError, argparse.ArgumentTypeError):
-            raise app_errors.VpnctlError(
-                "probes require HTTPS URLs without credentials and literal expected exit IPs"
-            ) from None
-        state.setdefault("health_settings", {})[args.name] = {
-            "download_url": args.download_url,
-            "egress_url": args.egress_url,
-            "expected_exit_ips": args.expected_exit_ip,
-            "interval": args.interval,
-            "fail_threshold": args.fail_threshold,
-            "success_threshold": args.success_threshold,
-            "timeout": args.timeout,
-            "bytes_required": args.bytes_required,
-        }
-        app_state_storage.save_state(args.state, state)
+def command_health(args, *, store, persist, monitoring):
+    state = store.load(args.state)
+    if args.health_command == "configure":
+        configure_probe(state, args.name, _probe_settings(args))
+        store.save(args.state, state)
         return
-    if operation == "events":
-        for event in state.get("route_events", []):
-            print(
-                f"{event['at']}\t{event['policy']}\t{event['from'] or 'block'} -> {event['to']}"
-            )
+    if args.health_command == "events":
+        _print_events(state.get("route_events", []))
         return
-    if operation == "check":
-        now = time.time()
-        health = state.setdefault("health", {})
-        for name, upstream in state["upstreams"].items():
-            settings = state.get("health_settings", {}).get(name)
-            if (
-                not upstream.get("enabled", True)
-                or not settings
-                or health.get(name, {}).get("next_probe_at", 0) > now
-            ):
-                continue
-            result = vpn_monitor.probe_upstream(
-                upstream,
-                settings,
-                args.compose_file,
-                args.config.parent,
-                app_xray_runtime.run_compose,
-            )
-            try:
-                health[name] = vpn_health.record_probe(
-                    health.get(name, {}), result, time.time(), settings
-                )
-            except ValueError as error:
-                raise app_errors.VpnctlError(str(error)) from None
-        events = []
-        for name, policy in state["routing_policies"].items():
-            if policy["type"] not in {"priority", "balanced"}:
-                continue
-            before = policy.get("current_upstream")
-            selected = vpn_health.select_route(
-                policy, state["upstreams"], health, time.time()
-            )
-            policy["current_upstream"] = selected
-            if before != selected:
-                events.append(
-                    {
-                        "at": app_clock.utc_now(),
-                        "policy": name,
-                        "from": before,
-                        "to": selected or "block",
-                    }
-                )
-        state["route_events"] = (state.get("route_events", []) + events)[-100:]
-        app_xray_deployment.persist_state_and_config(
+    if args.health_command == "check":
+        events = monitoring(args.compose_file, args.config.parent).check(state)
+        persist(
             state,
             args.state,
             args.config,
             args.compose_file,
             restart=not args.no_restart,
         )
-        for event in events:
-            print(
-                f"Route switch: {event['policy']} {event['from'] or 'block'} -> {event['to']}"
-            )
+        _print_switches(events)
+    _print_status(state)
+
+
+def _probe_settings(args):
+    return {
+        "download_url": args.download_url,
+        "egress_url": args.egress_url,
+        "expected_exit_ips": args.expected_exit_ip,
+        "interval": args.interval,
+        "fail_threshold": args.fail_threshold,
+        "success_threshold": args.success_threshold,
+        "timeout": args.timeout,
+        "bytes_required": args.bytes_required,
+    }
+
+
+def _print_events(events):
+    for event in events:
+        print(
+            f"{event['at']}\t{event['policy']}\t{event['from'] or 'block'} -> {event['to']}"
+        )
+
+
+def _print_switches(events):
+    for event in events:
+        print(
+            f"Route switch: {event['policy']} {event['from'] or 'block'} -> {event['to']}"
+        )
+
+
+def _print_status(state):
     for name, upstream in state["upstreams"].items():
         record = state.get("health", {}).get(name, {})
         print(

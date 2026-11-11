@@ -51,21 +51,7 @@ class InventoryCliTests(unittest.TestCase):
             root = Path(directory)
             state_path = root / "state.json"
             inventory = root / "inventory.json"
-            state = app_state_creation.create_state(
-                "vpn.example.com",
-                "example.com:443",
-                "example.com",
-                8443,
-                ["phone"],
-                None,
-            )
-            state["node"] = {"id": "ru-vps", "role": "gateway"}
-            state["upstreams"]["ny"] = vpn_transports.parse_link(
-                "vless://11111111-2222-3333-4444-555555555555@cdn.example.com:443"
-                "?security=tls&type=xhttp&sni=cdn.example.com"
-            )
-            app_state_storage.save_state(state_path, state)
-            app_files.write_json(inventory, vpn_inventory.example_inventory())
+            state = self._binding_state(state_path, inventory)
             common = ["--state", str(state_path)]
             with redirect_stdout(StringIO()):
                 self.assertEqual(
@@ -114,3 +100,21 @@ class InventoryCliTests(unittest.TestCase):
             saved = app_state_storage.load_state(state_path)
             self.assertEqual(saved["upstream_nodes"], {"ny": "ny-vps"})
             self.assertEqual(saved["profiles"], state["profiles"])
+
+    def _binding_state(self, state_path, inventory):
+        state = app_state_creation.create_state(
+            "vpn.example.com",
+            "example.com:443",
+            "example.com",
+            8443,
+            ["phone"],
+            None,
+        )
+        state["node"] = {"id": "ru-vps", "role": "gateway"}
+        state["upstreams"]["ny"] = vpn_transports.parse_link(
+            "vless://11111111-2222-3333-4444-555555555555@cdn.example.com:443"
+            "?security=tls&type=xhttp&sni=cdn.example.com"
+        )
+        app_state_storage.save_state(state_path, state)
+        app_files.write_json(inventory, vpn_inventory.example_inventory())
+        return state

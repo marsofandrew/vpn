@@ -1,0 +1,47 @@
+{
+  "log": {
+    "loglevel": "info"
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 8443,
+      "protocol": "vless",
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "$fixture:0"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "xhttpSettings": {
+          "path": "/ech-test",
+          "mode": "stream-one"
+        },
+        "tlsSettings": {
+          "minVersion": "1.3",
+          "alpn": [
+            "h2"
+          ],
+          "echServerKeys": "$fixture:1",
+          "certificates": [
+            {
+              "certificateFile": "/work/cert.pem",
+              "keyFile": "/work/key.pem"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}

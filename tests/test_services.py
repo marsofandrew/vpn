@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from vpn_manager import accounting, clock, files
 from vpn_manager.errors import VpnctlError
@@ -53,6 +53,9 @@ class UsageServiceTests(unittest.TestCase):
 
 class DeploymentServiceTests(unittest.TestCase):
     def setUp(self):
+        period = patch.object(clock, "current_usage_period", return_value="2026-11")
+        period.start()
+        self.addCleanup(period.stop)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)

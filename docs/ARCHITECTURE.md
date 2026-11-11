@@ -1,5 +1,10 @@
 # Architecture and reliability milestone
 
+Current implementation: schema v4. The historical review below records the v3
+baseline. See [SCHEMA_V4.md](SCHEMA_V4.md) for current data and
+[REFACTORING.md](REFACTORING.md) for the `vpn_manager` package and workflow
+boundaries introduced by the behavior-preserving SRP refactor.
+
 ## Baseline (2026-11-08)
 
 Checkout: marsofandrew/vpn, originally f0839fa. The reviewed pre-existing

@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+from cli_fixture import CliFixture
+
 from vpn_manager import accounting as app_accounting
 from vpn_manager import clock as app_clock
 from vpn_manager import errors as app_errors
@@ -22,6 +24,7 @@ from vpn_manager.state import importing as app_state_importing
 from vpn_manager.state import legacy_links as app_state_legacy_links
 from vpn_manager.state import migration as app_state_migration
 from vpn_manager.state import storage as app_state_storage
+from vpn_manager.xray import deployment as app_xray_deployment
 from vpn_manager.xray import rendering as app_xray_rendering
 from vpn_manager.xray import runtime as app_xray_runtime
 
@@ -381,7 +384,11 @@ class VpnctlTests(unittest.TestCase):
                 },
             )()
 
-            app_cli_runtime.command_compose(args, ["up", "-d"])
+            app_cli_runtime.command_up(
+                args,
+                store=app_state_storage.JsonStateStore(),
+                deploy=app_xray_deployment.deploy_config,
+            )
 
             self.assertIsNone(captured["port"])
             self.assertEqual(
@@ -732,196 +739,61 @@ class VpnctlTests(unittest.TestCase):
             )
 
     def test_profile_add_and_scoped_client_remove_commands(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            state_path = Path(tmp_dir) / "state.json"
-            config_path = Path(tmp_dir) / "config.json"
-            compose_path = Path(tmp_dir) / "docker-compose.yaml"
-            compose_path.write_text("services: {}\n")
-            calls = []
-
-            def fake_run_compose(
-                compose_file: Path,
-                args: list[str],
-                capture: bool = False,
-                port: int | None = None,
-            ):
-                calls.append((compose_file, args, capture, port))
-                return subprocess.CompletedProcess([], 0, stdout="", stderr="")
-
-            app_xray_runtime.run_compose = fake_run_compose
-            output = StringIO()
-
-            with redirect_stdout(output):
-                self.assertEqual(
-                    app_cli_entrypoint.main(
-                        [
-                            "--state",
-                            str(state_path),
-                            "--config",
-                            str(config_path),
-                            "--compose-file",
-                            str(compose_path),
-                            "init",
-                            "--server-host",
-                            "vpn.example.com",
-                            "--reality-target",
-                            "www.cloudflare.com:443",
-                            "--default-domain",
-                            "example.com",
-                            "--client",
-                            "phone",
-                        ]
-                    ),
-                    0,
-                )
-                self.assertEqual(
-                    app_cli_entrypoint.main(
-                        [
-                            "--state",
-                            str(state_path),
-                            "--config",
-                            str(config_path),
-                            "--compose-file",
-                            str(compose_path),
-                            "profile",
-                            "add",
-                            "backup",
-                            "--port",
-                            "8443",
-                            "--reality-target",
-                            "www.microsoft.com:443",
-                            "--client",
-                            "tablet",
-                        ]
-                    ),
-                    0,
-                )
-                self.assertEqual(
-                    app_cli_entrypoint.main(
-                        [
-                            "--state",
-                            str(state_path),
-                            "--config",
-                            str(config_path),
-                            "--compose-file",
-                            str(compose_path),
-                            "client",
-                            "remove",
-                            "tablet",
-                            "--profile",
-                            "backup",
-                        ]
-                    ),
-                    0,
-                )
-
-            state = json.loads(state_path.read_text())
-            config = json.loads(config_path.read_text())
-            backup = next(
-                profile for profile in state["profiles"] if profile["name"] == "backup"
-            )
-            self.assertEqual(backup["clients"], [])
+        fixture = CliFixture(self)
+        with (
+            patch.object(app_xray_runtime, "run_compose", fixture.compose),
+            redirect_stdout(StringIO()),
+        ):
+            self.assertEqual(fixture.initialize(), 0)
             self.assertEqual(
-                [inbound["port"] for inbound in config["inbounds"][:2]], [443, 8443]
+                fixture.run(
+                    "profile",
+                    "add",
+                    "backup",
+                    "--port",
+                    "8443",
+                    "--reality-target",
+                    "www.microsoft.com:443",
+                    "--client",
+                    "tablet",
+                ),
+                0,
             )
             self.assertEqual(
-                [call[1] for call in calls if call[1][0] == "up"],
-                [["up", "-d", "--force-recreate", app_settings.XRAY_SERVICE]] * 2,
+                fixture.run("client", "remove", "tablet", "--profile", "backup"), 0
             )
+        state = json.loads(fixture.state_path.read_text())
+        config = json.loads(fixture.config_path.read_text())
+        backup = next(
+            profile for profile in state["profiles"] if profile["name"] == "backup"
+        )
+        self.assertEqual(backup["clients"], [])
+        self.assertEqual(
+            [inbound["port"] for inbound in config["inbounds"][:2]], [443, 8443]
+        )
+        self.assertEqual(
+            [call[1] for call in fixture.calls if call[1][0] == "up"],
+            [["up", "-d", "--force-recreate", app_settings.XRAY_SERVICE]] * 2,
+        )
 
     def test_profile_outbound_and_upstream_commands(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            state_path = Path(tmp_dir) / "state.json"
-            config_path = Path(tmp_dir) / "config.json"
-            compose_path = Path(tmp_dir) / "docker-compose.yaml"
-            compose_path.write_text("services: {}\n")
-            app_xray_runtime.run_compose = (
-                lambda compose_file, args, capture=False: subprocess.CompletedProcess(
-                    [], 0, stdout="", stderr=""
-                )
-            )
-
-            self.assertEqual(
-                app_cli_entrypoint.main(
-                    [
-                        "--state",
-                        str(state_path),
-                        "--config",
-                        str(config_path),
-                        "--compose-file",
-                        str(compose_path),
-                        "init",
-                        "--server-host",
-                        "vpn.example.com",
-                        "--reality-target",
-                        "www.cloudflare.com:443",
-                        "--default-domain",
-                        "example.com",
-                        "--client",
-                        "phone",
-                    ]
-                ),
-                0,
-            )
+        fixture = CliFixture(self)
+        with patch.object(app_xray_runtime, "run_compose", fixture.compose):
+            self.assertEqual(fixture.initialize(), 0)
             self.assertNotEqual(
-                app_cli_entrypoint.main(
-                    [
-                        "--state",
-                        str(state_path),
-                        "--config",
-                        str(config_path),
-                        "--compose-file",
-                        str(compose_path),
-                        "profile",
-                        "outbound",
-                        "default",
-                        "--outbound",
-                        "proxy",
-                    ]
-                ),
-                0,
+                fixture.run("profile", "outbound", "default", "--outbound", "proxy"), 0
             )
             self.assertEqual(
-                app_cli_entrypoint.main(
-                    [
-                        "--state",
-                        str(state_path),
-                        "--config",
-                        str(config_path),
-                        "--compose-file",
-                        str(compose_path),
-                        "upstream",
-                        "set",
-                        "--link",
-                        SAMPLE_UPSTREAM_LINK,
-                    ]
-                ),
-                0,
+                fixture.run("upstream", "set", "--link", SAMPLE_UPSTREAM_LINK), 0
             )
             self.assertEqual(
-                app_cli_entrypoint.main(
-                    [
-                        "--state",
-                        str(state_path),
-                        "--config",
-                        str(config_path),
-                        "--compose-file",
-                        str(compose_path),
-                        "profile",
-                        "outbound",
-                        "default",
-                        "--outbound",
-                        "proxy",
-                    ]
-                ),
-                0,
+                fixture.run("profile", "outbound", "default", "--outbound", "proxy"), 0
             )
-
-            config = json.loads(config_path.read_text())
-            self.assertEqual(
-                config["routing"]["rules"][1]["outboundTag"],
-                app_settings.UPSTREAM_OUTBOUND_TAG,
-            )
+        config = json.loads(fixture.config_path.read_text())
+        self.assertEqual(
+            config["routing"]["rules"][1]["outboundTag"],
+            app_settings.UPSTREAM_OUTBOUND_TAG,
+        )
 
 
 if __name__ == "__main__":

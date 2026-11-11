@@ -125,7 +125,9 @@ class StabilizationValidationTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         app_errors.VpnctlError, "cannot overwrite"
                     ):
-                        app_cli_exports.command_subscription(args)
+                        app_cli_exports.command_subscription(
+                            args, store=app_state_storage.JsonStateStore()
+                        )
                     self.assertEqual(target.read_bytes(), previous)
 
     def test_invalid_v3_backup_is_not_archived_during_recovery(self):

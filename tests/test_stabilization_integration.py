@@ -1,12 +1,3 @@
-import vpn_transports
-from vpn_manager import accounting as app_accounting
-from vpn_manager import files as app_files
-from vpn_manager.exports import links as app_exports_links
-from vpn_manager.state import creation as app_state_creation
-from vpn_manager.state import model as app_state_model
-from vpn_manager.xray import rendering as app_xray_rendering
-from vpn_manager.xray import runtime as app_xray_runtime
-
 """Real local traffic and stabilization; dedicated credential rejection is deferred.
 
 XRAY_INTEGRATION=1 python3 -m unittest discover -s tests -p test_stabilization_integration.py -v
@@ -39,24 +30,20 @@ from stabilization_fixture import (
     require_runtime,
 )
 
+import vpn_transports
+from vpn_manager import accounting as app_accounting
+from vpn_manager import files as app_files
+from vpn_manager.exports import links as app_exports_links
+from vpn_manager.state import creation as app_state_creation
+from vpn_manager.state import model as app_state_model
+from vpn_manager.xray import rendering as app_xray_rendering
+from vpn_manager.xray import runtime as app_xray_runtime
+
 
 class StabilizationHelperTests(unittest.TestCase):
     def test_configs_exist_privately_before_any_container_and_pin_topology(self):
         with tempfile.TemporaryDirectory(prefix="stabilization-helper-") as directory:
-            fixture = StabilizationFixture.__new__(StabilizationFixture)
-            fixture.root = Path(directory)
-            fixture.project = "xray-stabilization-unit"
-            fixture.compose_file = fixture.root / "compose.json"
-            fixture.config_path = fixture.root / "gateway.json"
-            fixture.state_path = fixture.root / "state.json"
-            (
-                fixture.gateway_port,
-                fixture.ny_tcp_port,
-                fixture.ny_tls_port,
-                fixture.socks_port,
-            ) = range(24443, 24447)
-            fixture.proxy = SimpleNamespace(port=24447)
-            fixture.reality_target = "origin.example.test:24448"
+            fixture = self._config_fixture(directory)
             with (
                 patch.dict(
                     os.environ,
@@ -105,6 +92,23 @@ class StabilizationHelperTests(unittest.TestCase):
             for path in fixture.root.iterdir():
                 self.assertTrue(path.is_file(), path.name)
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600, path.name)
+
+    def _config_fixture(self, directory):
+        fixture = StabilizationFixture.__new__(StabilizationFixture)
+        fixture.root = Path(directory)
+        fixture.project = "xray-stabilization-unit"
+        fixture.compose_file = fixture.root / "compose.json"
+        fixture.config_path = fixture.root / "gateway.json"
+        fixture.state_path = fixture.root / "state.json"
+        (
+            fixture.gateway_port,
+            fixture.ny_tcp_port,
+            fixture.ny_tls_port,
+            fixture.socks_port,
+        ) = range(24443, 24447)
+        fixture.proxy = SimpleNamespace(port=24447)
+        fixture.reality_target = "origin.example.test:24448"
+        return fixture
 
     def test_fixture_trust_override_changes_only_tls_flag_and_restores_renderer(self):
         state = app_state_creation.create_state(
@@ -275,6 +279,12 @@ class StabilizationIntegrationTests(unittest.TestCase):
         )
 
     def test_real_transfers_polling_restart_checkpoint_epoch_and_quota_cutoff(self):
+        first, epoch = self._initial_usage()
+        restarted, next_epoch = self._restart_with_unpolled_usage(first, epoch)
+        after_transfer = self._new_epoch_traffic(restarted, next_epoch)
+        self._quota_cutoff(after_transfer, next_epoch)
+
+    def _initial_usage(self):
         fixture = self.fixture
         fixture.assert_traffic_route("ny-primary")
         first = fixture.settled_usage(minimum_downlink=len(BODY))
@@ -291,6 +301,13 @@ class StabilizationIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(repeated["accounting"], first["accounting"])
 
+        return first, epoch
+
+    def _restart_with_unpolled_usage(self, first, epoch):
+        fixture = self.fixture
+        usage = fixture.usage(first)
+        email = first["profiles"][0]["clients"][0]["email"]
+        checkpoint = first["accounting"]["checkpoints"][email]
         fixture.transfer()
         raw = app_accounting.collect_usage_deltas(
             app_xray_runtime.query_xray_stats(
@@ -316,6 +333,10 @@ class StabilizationIntegrationTests(unittest.TestCase):
             len(BODY),
             "restart lost traffic not previously polled",
         )
+        return restarted, next_epoch
+
+    def _new_epoch_traffic(self, restarted, next_epoch):
+        fixture = self.fixture
         after_restart = fixture.settled_usage(
             minimum_downlink=fixture.usage(restarted)[1]
         )
@@ -337,6 +358,10 @@ class StabilizationIntegrationTests(unittest.TestCase):
             app_xray_runtime.runtime_epoch(fixture.compose_file), next_epoch
         )
 
+        return after_transfer
+
+    def _quota_cutoff(self, after_transfer, next_epoch):
+        fixture = self.fixture
         fixture.cli(
             "quota",
             "set",
@@ -362,6 +387,12 @@ class StabilizationIntegrationTests(unittest.TestCase):
         self.assert_private_files()
 
     def test_real_monitor_failover_both_unavailable_block_and_restore_cooldown(self):
+        primary_epoch = self._initial_healthy_paths()
+        self._primary_path_loss(primary_epoch)
+        fallback_epoch = self._both_unavailable_and_fallback_recovery()
+        self._primary_recovery_cooldown(fallback_epoch)
+
+    def _initial_healthy_paths(self):
         fixture = self.fixture
         fixture.configure_health(cooldown=30)
         self.assert_selected(fixture.health_check(), None)
@@ -375,6 +406,10 @@ class StabilizationIntegrationTests(unittest.TestCase):
         fixture.assert_traffic_route("ny-primary")
         primary_epoch = app_xray_runtime.runtime_epoch(fixture.compose_file)
 
+        return primary_epoch
+
+    def _primary_path_loss(self, primary_epoch):
+        fixture = self.fixture
         fixture.proxy.set_enabled(False)
         once = fixture.health_check()
         self.assert_selected(once, "ny-primary")
@@ -390,6 +425,8 @@ class StabilizationIntegrationTests(unittest.TestCase):
         )
         fixture.assert_traffic_route("ny-tls")
 
+    def _both_unavailable_and_fallback_recovery(self):
+        fixture = self.fixture
         fixture.compose("stop", "--timeout", "3", "ny")
         fixture.health_check()
         blocked = fixture.health_check()
@@ -409,6 +446,10 @@ class StabilizationIntegrationTests(unittest.TestCase):
         fixture.assert_traffic_route("ny-tls")
         fallback_epoch = app_xray_runtime.runtime_epoch(fixture.compose_file)
 
+        return fallback_epoch
+
+    def _primary_recovery_cooldown(self, fallback_epoch):
+        fixture = self.fixture
         fixture.proxy.set_enabled(True)
         self.assert_selected(fixture.health_check(), "ny-tls")
         restored = fixture.health_check()
@@ -418,15 +459,7 @@ class StabilizationIntegrationTests(unittest.TestCase):
             app_xray_runtime.runtime_epoch(fixture.compose_file), fallback_epoch
         )
         fixture.assert_traffic_route("ny-tls")
-        cooldown_end = restored["health"]["ny-primary"]["restored_at"] + 30
-        deadline = time.monotonic() + 32
-        while time.time() <= cooldown_end:
-            self.assertLess(
-                time.monotonic(),
-                deadline,
-                "restore cooldown wait exceeded its deadline",
-            )
-            time.sleep(min(0.2, max(0.01, cooldown_end - time.time())))
+        self._wait_restore_cooldown(restored)
         recovered = fixture.health_check()
         self.assert_selected(recovered, "ny-primary")
         self.assertNotEqual(
@@ -449,6 +482,17 @@ class StabilizationIntegrationTests(unittest.TestCase):
             ],
         )
         self.assert_private_files()
+
+    def _wait_restore_cooldown(self, restored):
+        cooldown_end = restored["health"]["ny-primary"]["restored_at"] + 30
+        deadline = time.monotonic() + 32
+        while time.time() <= cooldown_end:
+            self.assertLess(
+                time.monotonic(),
+                deadline,
+                "restore cooldown wait exceeded its deadline",
+            )
+            time.sleep(min(0.2, max(0.01, cooldown_end - time.time())))
 
 
 if __name__ == "__main__":

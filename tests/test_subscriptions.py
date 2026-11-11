@@ -1,5 +1,3 @@
-from vpn_manager import files as atomic_files
-
 """Generated UUID/key fixtures and reserved addresses only; no live endpoints."""
 
 import base64
@@ -17,6 +15,7 @@ from urllib.parse import quote, unquote, urlencode, urlsplit
 
 import vpn_subscriptions as subscriptions
 import vpn_transports
+from vpn_manager import files as atomic_files
 
 
 def fixture_link(

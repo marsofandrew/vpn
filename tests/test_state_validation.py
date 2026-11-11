@@ -4,6 +4,11 @@ import unittest
 import uuid
 from unittest.mock import patch
 
+from fixture_cases import (
+    TEST_STATE_VALIDATION_KNOWN_STRING_AND_BOOLEAN_FIELDS_REJECT_INCOMPATIBLE_TYPES_PATHS,
+    TEST_STATE_VALIDATION_REQUIRED_FIELDS_RAISE_VALUE_ERROR_WHEN_MISSING_CASES,
+)
+
 import vpn_health
 import vpn_transports
 from vpn_manager import clock as app_clock
@@ -253,68 +258,9 @@ class StateValidationTests(unittest.TestCase):
                 self.assert_invalid(state, "state")
 
     def test_required_fields_raise_value_error_when_missing(self):
-        cases = [
-            (
-                (),
-                (
-                    "version",
-                    "server_host",
-                    "default_domain",
-                    "node",
-                    "upstreams",
-                    "routing_policies",
-                    "profiles",
-                ),
-                "state",
-            ),
-            (("node",), ("id", "role"), "state.node"),
-            (
-                ("profiles", 0),
-                ("port", "reality_target", "short_id", "keys"),
-                "state.profiles[0]",
-            ),
-            (
-                ("profiles", 0, "keys"),
-                ("private_key", "public_key"),
-                "state.profiles[0].keys",
-            ),
-            (
-                ("profiles", 0, "clients", 0),
-                ("name", "id", "email"),
-                "state.profiles[0].clients[0]",
-            ),
-            (
-                ("upstreams", "exit"),
-                ("protocol", "address", "port", "auth", "transport", "security"),
-                "state.upstreams[0]",
-            ),
-            (("upstreams", "exit", "auth"), ("id",), "state.upstreams[0].auth"),
-            (
-                ("upstreams", "exit", "transport"),
-                ("type",),
-                "state.upstreams[0].transport",
-            ),
-            (
-                ("upstreams", "exit", "security"),
-                ("type", "settings"),
-                "state.upstreams[0].security",
-            ),
-            (
-                ("routing_policies", "foreign"),
-                ("type", "upstreams"),
-                "state.routing_policies[2]",
-            ),
-            (
-                ("client_entries", "phone-exit"),
-                ("client", "endpoint"),
-                "state.client_entries[0]",
-            ),
-            (
-                ("route_events", 0),
-                ("at", "policy", "from", "to"),
-                "state.route_events[0]",
-            ),
-        ]
+        cases = (
+            TEST_STATE_VALIDATION_REQUIRED_FIELDS_RAISE_VALUE_ERROR_WHEN_MISSING_CASES
+        )
         for record_path, fields, safe_path in cases:
             for field in fields:
                 with self.subTest(record=record_path, field=field):
@@ -358,57 +304,7 @@ class StateValidationTests(unittest.TestCase):
                     self.assert_invalid(state, safe_path)
 
     def test_known_string_and_boolean_fields_reject_incompatible_types(self):
-        paths = [
-            (("server_host",), "state.server_host"),
-            (("default_domain",), "state.default_domain"),
-            (("flow",), "state.flow"),
-            (("node", "id"), "state.node.id"),
-            (("node", "role"), "state.node.role"),
-            (("node", "foreign_only"), "state.node.foreign_only"),
-            (("profiles", 0, "name"), "state.profiles[0].name"),
-            (("profiles", 0, "route"), "state.profiles[0].route"),
-            (("profiles", 0, "outbound_mode"), "state.profiles[0].outbound_mode"),
-            (("profiles", 0, "reality_target"), "state.profiles[0].reality_target"),
-            (("profiles", 0, "short_id"), "state.profiles[0].short_id"),
-            (
-                ("profiles", 0, "keys", "private_key"),
-                "state.profiles[0].keys.private_key",
-            ),
-            (
-                ("profiles", 0, "keys", "public_key"),
-                "state.profiles[0].keys.public_key",
-            ),
-            (
-                ("profiles", 0, "clients", 0, "email"),
-                "state.profiles[0].clients[0].email",
-            ),
-            (
-                ("profiles", 0, "clients", 0, "enabled"),
-                "state.profiles[0].clients[0].enabled",
-            ),
-            (
-                ("profiles", 0, "clients", 0, "disabled_reason"),
-                "state.profiles[0].clients[0].disabled_reason",
-            ),
-            (("accounting", "epoch"), "state.accounting.epoch"),
-            (("health", "exit", "status"), "state.health[0].status"),
-            (("health", "exit", "error"), "state.health[0].error"),
-            (("health", "exit", "success"), "state.health[0].success"),
-            (
-                ("health_settings", "exit", "download_url"),
-                "state.health_settings[0].download_url",
-            ),
-            (("upstream_nodes", "exit"), "state.upstream_nodes[0]"),
-            (
-                ("client_entries", "phone-exit", "client"),
-                "state.client_entries[0].client",
-            ),
-            (("route_events", 0, "from"), "state.route_events[0].from"),
-            (
-                ("routing_policies", "foreign", "current_upstream"),
-                "state.routing_policies[2].current_upstream",
-            ),
-        ]
+        paths = TEST_STATE_VALIDATION_KNOWN_STRING_AND_BOOLEAN_FIELDS_REJECT_INCOMPATIBLE_TYPES_PATHS
         for path, safe_path in paths:
             for value in ([], {}, 1):
                 with self.subTest(path=path, kind=type(value).__name__):

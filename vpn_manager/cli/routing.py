@@ -5,12 +5,10 @@ from vpn_manager import errors as app_errors
 from vpn_manager import settings as app_settings
 from vpn_manager import values as app_values
 from vpn_manager.state import model as app_state_model
-from vpn_manager.state import storage as app_state_storage
-from vpn_manager.xray import deployment as app_xray_deployment
 
 
-def command_upstream_show(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_upstream_show(args: argparse.Namespace, *, store) -> None:
+    state = store.load(args.state)
     name = getattr(args, "name", app_settings.UPSTREAM_OUTBOUND_TAG)
     upstream = state["upstreams"].get(name)
     if not upstream:
@@ -23,8 +21,8 @@ def command_upstream_show(args: argparse.Namespace) -> None:
     )
 
 
-def command_upstream_set(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_upstream_set(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     name = app_values.validate_stable_name(
         getattr(args, "name", app_settings.UPSTREAM_OUTBOUND_TAG)
     )
@@ -38,14 +36,14 @@ def command_upstream_set(args: argparse.Namespace) -> None:
     state["routing_policies"].setdefault(
         name, {"type": "upstream", "upstreams": [name]}
     )
-    app_xray_deployment.persist_state_and_config(
+    persist(
         state, args.state, args.config, args.compose_file, restart=not args.no_restart
     )
     print(f"Upstream saved: {name}")
 
 
-def command_upstream_clear(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_upstream_clear(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     name = getattr(args, "name", app_settings.UPSTREAM_OUTBOUND_TAG)
     assigned = {profile["route"] for profile in app_state_model.all_profiles(state)}
     if any(
@@ -60,30 +58,30 @@ def command_upstream_clear(args: argparse.Namespace) -> None:
         for key, policy in state["routing_policies"].items()
         if name not in policy.get("upstreams", [])
     }
-    app_xray_deployment.persist_state_and_config(
+    persist(
         state, args.state, args.config, args.compose_file, restart=not args.no_restart
     )
     print("Upstream cleared.")
 
 
-def command_upstream_list(args: argparse.Namespace) -> None:
-    for name in app_state_storage.load_state(args.state)["upstreams"]:
+def command_upstream_list(args: argparse.Namespace, *, store) -> None:
+    for name in store.load(args.state)["upstreams"]:
         args.name = name
-        command_upstream_show(args)
+        command_upstream_show(args, store=store)
 
 
-def command_upstream_enabled(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_upstream_enabled(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     if args.name not in state["upstreams"]:
         raise app_errors.VpnctlError("unknown upstream")
     state["upstreams"][args.name]["enabled"] = args.upstream_command == "enable"
-    app_xray_deployment.persist_state_and_config(
+    persist(
         state, args.state, args.config, args.compose_file, restart=not args.no_restart
     )
 
 
-def command_route(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_route(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     profile = app_state_model.require_profile(state, args.profile)
     if args.route_command == "set":
         if args.policy not in state["routing_policies"]:
@@ -94,7 +92,7 @@ def command_route(args: argparse.Namespace) -> None:
             if state["routing_policies"][args.policy]["type"] == "direct"
             else "proxy"
         )
-        app_xray_deployment.persist_state_and_config(
+        persist(
             state,
             args.state,
             args.config,
@@ -104,8 +102,8 @@ def command_route(args: argparse.Namespace) -> None:
     print(f"{app_state_model.profile_label(profile)}\tpolicy={profile['route']}")
 
 
-def command_policy(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_policy(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     if args.policy_command == "list":
         for name, policy in state["routing_policies"].items():
             print(
@@ -120,18 +118,18 @@ def command_policy(args: argparse.Namespace) -> None:
         policy["upstreams"] = args.upstream or []
         policy["cooldown"] = args.cooldown
     state["routing_policies"][name] = policy
-    app_xray_deployment.persist_state_and_config(
+    persist(
         state, args.state, args.config, args.compose_file, restart=not args.no_restart
     )
 
 
-def command_node(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_node(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     state["node"] = {
         "id": app_values.validate_stable_name(args.id),
         "role": args.role,
         "foreign_only": args.foreign_only,
     }
-    app_xray_deployment.persist_state_and_config(
+    persist(
         state, args.state, args.config, args.compose_file, restart=not args.no_restart
     )

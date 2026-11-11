@@ -1,0 +1,58 @@
+{
+  "log": {
+    "loglevel": "info"
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 1080,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": false
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "server",
+            "port": 8443,
+            "users": [
+              {
+                "id": "$fixture:0",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "xhttpSettings": {
+          "path": "/ech-test",
+          "mode": "stream-one"
+        },
+        "tlsSettings": {
+          "serverName": "origin.example.test",
+          "minVersion": "1.3",
+          "alpn": [
+            "h2"
+          ],
+          "echConfigList": "$fixture:1",
+          "disableSystemRoot": true,
+          "certificates": [
+            {
+              "certificateFile": "/work/cert.pem",
+              "usage": "verify"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

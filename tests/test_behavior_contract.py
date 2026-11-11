@@ -1,3 +1,15 @@
+"""Behavior snapshots use synthetic identities and never load deployment state."""
+
+import argparse
+import copy
+import io
+import json
+import tempfile
+import unittest
+from contextlib import redirect_stderr
+from pathlib import Path
+from unittest.mock import patch
+
 from vpn_manager import errors as app_errors
 from vpn_manager.cli import entrypoint as app_cli_entrypoint
 from vpn_manager.cli import parser as app_cli_parser
@@ -6,17 +18,6 @@ from vpn_manager.state import migration as app_state_migration
 from vpn_manager.state import storage as app_state_storage
 from vpn_manager.state import validation as app_state_validation
 from vpn_manager.xray import rendering as app_xray_rendering
-
-"""Behavior snapshots use synthetic identities and never load deployment state."""
-
-import argparse
-import copy
-import io
-import json
-import unittest
-from contextlib import redirect_stderr
-from pathlib import Path
-from unittest.mock import patch
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -92,7 +93,7 @@ class BehaviorContractTests(unittest.TestCase):
             app_state_validation.validate_state(state)
 
     def test_argument_error_exit_and_application_error_exit(self):
-        with redirect_stderr(io.StringIO()):
+        with redirect_stderr(io.StringIO()), tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(SystemExit) as raised:
                 app_cli_entrypoint.main(["--unknown"])
             self.assertEqual(raised.exception.code, 2)
@@ -100,10 +101,10 @@ class BehaviorContractTests(unittest.TestCase):
                 app_state_storage,
                 "load_state",
                 side_effect=app_errors.VpnctlError("fixture"),
-            ):
+            ) as load:
+                state_path = Path(directory) / "state.json"
                 self.assertEqual(
-                    app_cli_entrypoint.main(
-                        ["inventory", "validate", "--with-runtime", "--file", "missing"]
-                    ),
+                    app_cli_entrypoint.main(["--state", str(state_path), "usage"]),
                     1,
                 )
+                load.assert_called_once_with(state_path.resolve())

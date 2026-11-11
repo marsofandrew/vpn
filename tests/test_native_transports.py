@@ -2,12 +2,11 @@
 
 Run with XRAY_INTEGRATION=1 python3 -m unittest discover -s tests \
     -p test_native_transports.py -v
-Set XRAY_TEST_IMAGE to use an alternate image.
+Acceptance requires the official pinned image; another publisher is not a substitute.
 """
 
 import base64
 import copy
-import datetime
 import importlib
 import json
 import os
@@ -15,6 +14,8 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+from certificates import write_certificate
 
 
 @unittest.skipUnless(
@@ -27,10 +28,8 @@ class NativeTransportTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.transports = importlib.import_module("vpn_transports")
-        from cryptography import x509
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa, x25519
-        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import x25519
 
         cls.image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.10.31")
         temporary = tempfile.TemporaryDirectory(prefix="vpn-native-transports-")
@@ -60,36 +59,12 @@ class NativeTransportTests(unittest.TestCase):
             .rstrip("=")
         )
 
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "vpn.example.test")])
-        now = datetime.datetime.now(datetime.timezone.utc)
-        certificate = (
-            x509.CertificateBuilder()
-            .subject_name(name)
-            .issuer_name(name)
-            .public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now - datetime.timedelta(minutes=1))
-            .not_valid_after(now + datetime.timedelta(days=1))
-            .add_extension(
-                x509.SubjectAlternativeName(
-                    [
-                        x509.DNSName("vpn.example.test"),
-                    ]
-                ),
-                critical=False,
-            )
-            .sign(key, hashes.SHA256())
-        )
-        (cls.root / "certificate.pem").write_bytes(
-            certificate.public_bytes(serialization.Encoding.PEM)
-        )
-        (cls.root / "key.pem").write_bytes(
-            key.private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.PKCS8,
-                serialization.NoEncryption(),
-            )
+        write_certificate(
+            cls.root,
+            "vpn.example.test",
+            ["vpn.example.test"],
+            minutes=1,
+            certificate="certificate.pem",
         )
 
     def endpoint(self, transport, security, mode="auto", address="vpn.example.test"):

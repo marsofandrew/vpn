@@ -8,14 +8,12 @@ from vpn_manager import values as app_values
 from vpn_manager.exports import links as app_exports_links
 from vpn_manager.state import creation as app_state_creation
 from vpn_manager.state import model as app_state_model
-from vpn_manager.state import storage as app_state_storage
-from vpn_manager.xray import deployment as app_xray_deployment
 
 
-def command_profile_list(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_profile_list(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     if app_accounting.ensure_monthly_period(state):
-        app_xray_deployment.persist_state_and_config(state, args.state, args.config)
+        persist(state, args.state, args.config)
     for profile in app_state_model.all_profiles(state):
         clients = profile.get("clients", [])
         enabled_count = sum(1 for client in clients if client.get("enabled", True))
@@ -25,8 +23,8 @@ def command_profile_list(args: argparse.Namespace) -> None:
         )
 
 
-def command_profile_add(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_profile_add(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     app_accounting.ensure_monthly_period(state)
     profile_name = app_values.validate_profile_name(args.name)
     if app_state_model.find_profile(state, profile_name):
@@ -42,6 +40,21 @@ def command_profile_add(args: argparse.Namespace) -> None:
         quota_bytes,
         outbound_mode,
     )
+    _configure_transport(profile, args)
+    state["profiles"].append(profile)
+    persist(
+        state, args.state, args.config, args.compose_file, restart=not args.no_restart
+    )
+    print(
+        f"Profile added: {app_state_model.profile_label(profile)} on port {profile['port']} outbound={app_state_model.profile_outbound_mode(profile)}"
+    )
+    for client in profile["clients"]:
+        print(
+            f"Client {app_state_model.profile_label(profile)}/{client['name']}: {app_exports_links.generate_vless_link(client, state, profile)}"
+        )
+
+
+def _configure_transport(profile, args):
     if args.transport == "xhttp":
         profile["transport"] = {
             "type": "xhttp",
@@ -52,6 +65,10 @@ def command_profile_add(args: argparse.Namespace) -> None:
                 or ("stream-one" if args.security == "reality" else "auto"),
             },
         }
+    _configure_security(profile, args)
+
+
+def _configure_security(profile, args):
     if args.security == "tls":
         if (
             args.transport != "xhttp"
@@ -74,34 +91,27 @@ def command_profile_add(args: argparse.Namespace) -> None:
                 ],
             },
         }
-        if args.ech_server_keys_file:
-            if not args.ech_config_list_file:
-                raise app_errors.VpnctlError(
-                    "ECH profiles require both server keys and public client config files"
-                )
-            profile["security"]["settings"]["ech_server_keys"] = (
-                args.ech_server_keys_file.read_text(encoding="utf-8").strip()
-            )
-            profile["client_ech_config_list"] = args.ech_config_list_file.read_text(
-                encoding="utf-8"
-            ).strip()
+        _apply_ech_files(profile, args)
     elif args.ech_server_keys_file:
         raise app_errors.VpnctlError("ECH server keys require TLS security")
-    state["profiles"].append(profile)
-    app_xray_deployment.persist_state_and_config(
-        state, args.state, args.config, args.compose_file, restart=not args.no_restart
-    )
-    print(
-        f"Profile added: {app_state_model.profile_label(profile)} on port {profile['port']} outbound={app_state_model.profile_outbound_mode(profile)}"
-    )
-    for client in profile["clients"]:
-        print(
-            f"Client {app_state_model.profile_label(profile)}/{client['name']}: {app_exports_links.generate_vless_link(client, state, profile)}"
+
+
+def _apply_ech_files(profile, args):
+    if args.ech_server_keys_file:
+        if not args.ech_config_list_file:
+            raise app_errors.VpnctlError(
+                "ECH profiles require both server keys and public client config files"
+            )
+        profile["security"]["settings"]["ech_server_keys"] = (
+            args.ech_server_keys_file.read_text(encoding="utf-8").strip()
         )
+        profile["client_ech_config_list"] = args.ech_config_list_file.read_text(
+            encoding="utf-8"
+        ).strip()
 
 
-def command_profile_remove(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_profile_remove(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     app_accounting.ensure_monthly_period(state)
     profile = app_state_model.require_profile(state, args.name)
     if len(app_state_model.all_profiles(state)) == 1:
@@ -111,14 +121,14 @@ def command_profile_remove(args: argparse.Namespace) -> None:
         for item in app_state_model.all_profiles(state)
         if app_state_model.profile_label(item) != app_state_model.profile_label(profile)
     ]
-    app_xray_deployment.persist_state_and_config(
+    persist(
         state, args.state, args.config, args.compose_file, restart=not args.no_restart
     )
     print(f"Profile removed: {app_state_model.profile_label(profile)}")
 
 
-def command_profile_outbound(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_profile_outbound(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     app_accounting.ensure_monthly_period(state)
     profile = app_state_model.require_profile(state, args.name)
     profile["outbound_mode"] = app_values.validate_outbound_mode(args.outbound)
@@ -126,7 +136,7 @@ def command_profile_outbound(args: argparse.Namespace) -> None:
         "direct" if args.outbound == "direct" else app_settings.UPSTREAM_OUTBOUND_TAG
     )
     profile["updated_at"] = app_clock.utc_now()
-    app_xray_deployment.persist_state_and_config(
+    persist(
         state, args.state, args.config, args.compose_file, restart=not args.no_restart
     )
     print(

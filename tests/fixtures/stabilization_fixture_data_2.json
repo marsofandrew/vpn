@@ -1,0 +1,37 @@
+{
+  "ny": {
+    "log": {
+      "loglevel": "warning"
+    },
+    "inbounds": [
+      "$fixture:0",
+      "$fixture:1"
+    ],
+    "outbounds": [
+      {
+        "tag": "exit",
+        "protocol": "freedom",
+        "settings": {}
+      }
+    ]
+  },
+  "client": {
+    "log": {
+      "loglevel": "warning"
+    },
+    "inbounds": [
+      {
+        "listen": "127.0.0.1",
+        "port": "$fixture:2",
+        "protocol": "socks",
+        "settings": {
+          "auth": "noauth",
+          "udp": false
+        }
+      }
+    ],
+    "outbounds": [
+      "$fixture:3"
+    ]
+  }
+}

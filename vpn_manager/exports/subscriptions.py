@@ -1,5 +1,3 @@
-from vpn_manager.files import atomic_write
-
 """Standalone subscription artifacts; no runtime control or HTTP hosting.
 
 Client entries hold credentials and must be stored privately by the caller.
@@ -12,6 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import vpn_transports
+from vpn_manager.files import atomic_write
 
 
 def _name(name: str) -> None:

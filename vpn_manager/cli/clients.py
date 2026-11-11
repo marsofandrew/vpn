@@ -7,12 +7,10 @@ from vpn_manager import values as app_values
 from vpn_manager.exports import links as app_exports_links
 from vpn_manager.state import creation as app_state_creation
 from vpn_manager.state import model as app_state_model
-from vpn_manager.state import storage as app_state_storage
-from vpn_manager.xray import deployment as app_xray_deployment
 
 
-def command_client_add(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_client_add(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     app_accounting.ensure_monthly_period(state)
     profile = app_state_model.require_profile(state, args.profile)
     if app_state_model.find_client(
@@ -29,15 +27,15 @@ def command_client_add(args: argparse.Namespace) -> None:
     )
     profile["clients"].append(client)
     profile["updated_at"] = app_clock.utc_now()
-    app_xray_deployment.persist_state_and_config(
+    persist(
         state, args.state, args.config, args.compose_file, restart=not args.no_restart
     )
     print(f"Client added: {app_state_model.profile_label(profile)}/{client['name']}")
     print(app_exports_links.generate_vless_link(client, state, profile))
 
 
-def command_client_remove(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_client_remove(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     app_accounting.ensure_monthly_period(state)
     profile, client = app_state_model.require_client(
         state, args.name_or_id, args.profile
@@ -46,16 +44,16 @@ def command_client_remove(args: argparse.Namespace) -> None:
         item for item in profile["clients"] if item["id"] != client["id"]
     ]
     profile["updated_at"] = app_clock.utc_now()
-    app_xray_deployment.persist_state_and_config(
+    persist(
         state, args.state, args.config, args.compose_file, restart=not args.no_restart
     )
     print(f"Client removed: {app_state_model.profile_label(profile)}/{client['name']}")
 
 
-def command_client_list(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_client_list(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     if app_accounting.ensure_monthly_period(state):
-        app_xray_deployment.persist_state_and_config(state, args.state, args.config)
+        persist(state, args.state, args.config)
     profiles = (
         [app_state_model.require_profile(state, args.profile)]
         if args.profile
@@ -85,8 +83,10 @@ def command_client_list(args: argparse.Namespace) -> None:
         )
 
 
-def command_client_enabled(args: argparse.Namespace, enabled: bool) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_client_enabled(
+    args: argparse.Namespace, enabled: bool, *, persist, store
+) -> None:
+    state = store.load(args.state)
     app_accounting.ensure_monthly_period(state)
     profile, client = app_state_model.require_client(
         state, args.name_or_id, args.profile
@@ -95,7 +95,7 @@ def command_client_enabled(args: argparse.Namespace, enabled: bool) -> None:
     client["disabled_reason"] = None if enabled else args.reason
     client["updated_at"] = app_clock.utc_now()
     profile["updated_at"] = app_clock.utc_now()
-    app_xray_deployment.persist_state_and_config(
+    persist(
         state, args.state, args.config, args.compose_file, restart=not args.no_restart
     )
     print(
@@ -103,10 +103,10 @@ def command_client_enabled(args: argparse.Namespace, enabled: bool) -> None:
     )
 
 
-def command_link(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_link(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     if app_accounting.ensure_monthly_period(state):
-        app_xray_deployment.persist_state_and_config(state, args.state, args.config)
+        persist(state, args.state, args.config)
     profile, client = app_state_model.require_client(
         state, args.name_or_id, args.profile
     )
@@ -119,3 +119,11 @@ def command_link(args: argparse.Namespace) -> None:
             args.output,
         )
         print(f"QR code saved to {path}")
+
+
+def command_client_enable(args, *, persist, store):
+    command_client_enabled(args, True, persist=persist, store=store)
+
+
+def command_client_disable(args, *, persist, store):
+    command_client_enabled(args, False, persist=persist, store=store)

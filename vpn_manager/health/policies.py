@@ -34,6 +34,7 @@ def select_route(policy: dict, upstreams: dict, health: dict, now: float) -> str
         return _priority(policy, candidates, health, now)
     return candidates[0]
 
+
 def _latency(health, uid):
     value = health[uid].get("latency_ms")
     try:

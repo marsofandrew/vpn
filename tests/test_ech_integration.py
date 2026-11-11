@@ -5,7 +5,6 @@ XRAY_ECH_INTEGRATION=1 \
 """
 
 import base64
-import datetime
 import http.server
 import json
 import os
@@ -19,6 +18,9 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+
+from certificates import write_certificate
+from fixture_data import fixture_data
 
 BODY = bytes(range(256)) * 512
 
@@ -51,11 +53,6 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
 class EchIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from cryptography import x509
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-        from cryptography.x509.oid import NameOID
-
         cls.image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.10.31")
         cls.secret_values = []
         temporary = tempfile.TemporaryDirectory(prefix="xray-ech-material-")
@@ -73,40 +70,10 @@ class EchIntegrationTests(unittest.TestCase):
                 "independent ECH key generation produced identical configs"
             )
 
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        name = x509.Name(
-            [x509.NameAttribute(NameOID.COMMON_NAME, "origin.example.test")]
-        )
-        now = datetime.datetime.now(datetime.timezone.utc)
-        cert = (
-            x509.CertificateBuilder()
-            .subject_name(name)
-            .issuer_name(name)
-            .public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now - datetime.timedelta(minutes=5))
-            .not_valid_after(now + datetime.timedelta(days=1))
-            .add_extension(
-                x509.SubjectAlternativeName(
-                    [
-                        x509.DNSName("origin.example.test"),
-                    ]
-                ),
-                critical=False,
-            )
-            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
-            .sign(key, hashes.SHA256())
-        )
-        (cls.material / "cert.pem").write_bytes(
-            cert.public_bytes(serialization.Encoding.PEM)
-        )
-        key_pem = key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
+        key_pem = write_certificate(
+            cls.material, "origin.example.test", ["origin.example.test"], ca=True
         )
         cls.secret_values.append(key_pem.decode("ascii"))
-        (cls.material / "key.pem").write_bytes(key_pem)
 
     @classmethod
     def redacted(cls, text):
@@ -184,74 +151,12 @@ class EchIntegrationTests(unittest.TestCase):
         self.fixture_thread.start()
         self.addCleanup(self.stop_fixture)
         client_id = str(uuid.uuid4())
-        self.server = {
-            "log": {"loglevel": "info"},
-            "inbounds": [
-                {
-                    "listen": "0.0.0.0",
-                    "port": 8443,
-                    "protocol": "vless",
-                    "settings": {"decryption": "none", "clients": [{"id": client_id}]},
-                    "streamSettings": {
-                        "network": "xhttp",
-                        "security": "tls",
-                        "xhttpSettings": {"path": "/ech-test", "mode": "stream-one"},
-                        "tlsSettings": {
-                            "minVersion": "1.3",
-                            "alpn": ["h2"],
-                            "echServerKeys": self.ech_keys,
-                            "certificates": [
-                                {
-                                    "certificateFile": "/work/cert.pem",
-                                    "keyFile": "/work/key.pem",
-                                }
-                            ],
-                        },
-                    },
-                }
-            ],
-            "outbounds": [{"protocol": "freedom", "settings": {}}],
-        }
-        self.client = {
-            "log": {"loglevel": "info"},
-            "inbounds": [
-                {
-                    "listen": "0.0.0.0",
-                    "port": 1080,
-                    "protocol": "socks",
-                    "settings": {"auth": "noauth", "udp": False},
-                }
-            ],
-            "outbounds": [
-                {
-                    "protocol": "vless",
-                    "settings": {
-                        "vnext": [
-                            {
-                                "address": "server",
-                                "port": 8443,
-                                "users": [{"id": client_id, "encryption": "none"}],
-                            }
-                        ]
-                    },
-                    "streamSettings": {
-                        "network": "xhttp",
-                        "security": "tls",
-                        "xhttpSettings": {"path": "/ech-test", "mode": "stream-one"},
-                        "tlsSettings": {
-                            "serverName": "origin.example.test",
-                            "minVersion": "1.3",
-                            "alpn": ["h2"],
-                            "echConfigList": self.ech_config,
-                            "disableSystemRoot": True,
-                            "certificates": [
-                                {"certificateFile": "/work/cert.pem", "usage": "verify"}
-                            ],
-                        },
-                    },
-                }
-            ],
-        }
+        self.server = fixture_data(
+            "test_ech_integration_data_1", [client_id, self.ech_keys]
+        )
+        self.client = fixture_data(
+            "test_ech_integration_data_2", [client_id, self.ech_config]
+        )
         services = {}
         for name in ("server", "client"):
             services[name] = {

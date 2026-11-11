@@ -41,7 +41,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_paths(parser)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    register_init(subparsers)
+    register_import_config(subparsers)
+    register_render(subparsers)
+    register_upstream(subparsers)
+    register_route(subparsers)
+    register_policy(subparsers)
+    register_node(subparsers)
+    register_health(subparsers)
+    register_profile(subparsers)
+    register_client(subparsers)
+    register_quota(subparsers)
+    register_usage(subparsers)
+    register_link(subparsers)
+    register_endpoint(subparsers)
+    register_subscription(subparsers)
+    register_inventory(subparsers)
+    register_up(subparsers)
+    register_down(subparsers)
+    register_restart(subparsers)
+    register_status(subparsers)
+    register_logs(subparsers)
+    register_validate(subparsers)
+    return parser
 
+
+def register_init(subparsers):
     init_parser = subparsers.add_parser(
         "init", help="Create state and render the initial Xray config."
     )
@@ -60,6 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--default-domain",
         help="Domain used in generated client emails. Defaults to server host.",
     )
+    _add_init_profiles(init_parser)
+    _add_init_clients(init_parser)
+    init_parser.set_defaults(func=app_cli_initialization.command_init)
+
+
+def _add_init_profiles(init_parser):
     init_parser.add_argument(
         "--mode",
         choices=["direct", "proxy", "both"],
@@ -88,6 +119,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=app_settings.DEFAULT_PROFILE_NAME,
         help="Initial profile name for direct-only or proxy-only init.",
     )
+
+
+def _add_init_clients(init_parser):
     init_parser.add_argument(
         "--client",
         action="append",
@@ -101,8 +135,9 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "--force", action="store_true", help="Overwrite existing state."
     )
-    init_parser.set_defaults(func=app_cli_initialization.command_init)
 
+
+def register_import_config(subparsers):
     import_parser = subparsers.add_parser(
         "import-config", help="Import an existing Xray JSON config into vpnctl state."
     )
@@ -121,15 +156,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     import_parser.set_defaults(func=app_cli_initialization.command_import_config)
 
+
+def register_render(subparsers):
     render_parser = subparsers.add_parser("render", help="Render config from state.")
     render_parser.set_defaults(func=app_cli_initialization.command_render)
 
+
+def register_upstream(subparsers):
     upstream_parser = subparsers.add_parser(
         "upstream", help="Show or change the upstream VPN."
     )
     upstream_subparsers = upstream_parser.add_subparsers(
         dest="upstream_command", required=True
     )
+    _register_upstream_show(upstream_subparsers)
+    _register_upstream_set(upstream_subparsers)
+    _register_upstream_clear(upstream_subparsers)
+    _register_upstream_list(upstream_subparsers)
+    _register_upstream_bind(upstream_subparsers)
+
+
+def _register_upstream_show(upstream_subparsers):
     upstream_show_parser = upstream_subparsers.add_parser(
         "show", help="Show the configured upstream without printing UUIDs."
     )
@@ -137,6 +184,9 @@ def build_parser() -> argparse.ArgumentParser:
         "name", nargs="?", default=app_settings.UPSTREAM_OUTBOUND_TAG
     )
     upstream_show_parser.set_defaults(func=app_cli_routing.command_upstream_show)
+
+
+def _register_upstream_set(upstream_subparsers):
     upstream_set_parser = upstream_subparsers.add_parser(
         "set", help="Replace the upstream VPN link."
     )
@@ -145,15 +195,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     upstream_set_parser.add_argument("--no-restart", action="store_true")
     upstream_set_parser.set_defaults(func=app_cli_routing.command_upstream_set)
+
+
+def _register_upstream_clear(upstream_subparsers):
     upstream_clear_parser = upstream_subparsers.add_parser(
         "clear", help="Clear upstream when no proxy profiles exist."
     )
     upstream_clear_parser.add_argument("--no-restart", action="store_true")
     upstream_clear_parser.set_defaults(func=app_cli_routing.command_upstream_clear)
+
+
+def _register_upstream_list(upstream_subparsers):
     upstream_list_parser = upstream_subparsers.add_parser(
         "list", help="List named upstreams."
     )
     upstream_list_parser.set_defaults(func=app_cli_routing.command_upstream_list)
+
+
+def _register_upstream_bind(upstream_subparsers):
     upstream_bind = upstream_subparsers.add_parser(
         "bind", help="Associate an upstream with inventory metadata."
     )
@@ -173,6 +232,8 @@ def build_parser() -> argparse.ArgumentParser:
         else:
             operation_parser.set_defaults(func=app_cli_routing.command_upstream_enabled)
 
+
+def register_route(subparsers):
     route_parser = subparsers.add_parser(
         "route", help="Assign profile routing policies."
     )
@@ -185,6 +246,8 @@ def build_parser() -> argparse.ArgumentParser:
             operation_parser.add_argument("--no-restart", action="store_true")
         operation_parser.set_defaults(func=app_cli_routing.command_route)
 
+
+def register_policy(subparsers):
     policy_parser = subparsers.add_parser(
         "policy", help="Manage named routing policies."
     )
@@ -206,6 +269,8 @@ def build_parser() -> argparse.ArgumentParser:
     policy_set.add_argument("--no-restart", action="store_true")
     policy_set.set_defaults(func=app_cli_routing.command_policy)
 
+
+def register_node(subparsers):
     node_parser = subparsers.add_parser(
         "node", help="Configure local node role and routing guard."
     )
@@ -217,6 +282,8 @@ def build_parser() -> argparse.ArgumentParser:
     node_parser.add_argument("--no-restart", action="store_true")
     node_parser.set_defaults(func=app_cli_routing.command_node)
 
+
+def register_health(subparsers):
     health_parser = subparsers.add_parser(
         "health", help="Inspect or probe upstream paths on this gateway."
     )
@@ -244,15 +311,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     health_configure.set_defaults(func=app_cli_health.command_health)
 
+
+def register_profile(subparsers):
     profile_parser = subparsers.add_parser("profile", help="Manage VPN profiles.")
     profile_subparsers = profile_parser.add_subparsers(
         dest="profile_command", required=True
     )
+    _register_profile_list(profile_subparsers)
+    _register_profile_add(profile_subparsers)
+    _register_profile_remove(profile_subparsers)
+    _register_profile_outbound(profile_subparsers)
+
+
+def _register_profile_list(profile_subparsers):
     profile_list_parser = profile_subparsers.add_parser(
         "list", help="List VPN profiles."
     )
     profile_list_parser.set_defaults(func=app_cli_profiles.command_profile_list)
 
+
+def _register_profile_add(profile_subparsers):
     profile_add_parser = profile_subparsers.add_parser(
         "add", help="Add a VPN profile on another port."
     )
@@ -297,6 +375,8 @@ def build_parser() -> argparse.ArgumentParser:
     profile_add_parser.add_argument("--no-restart", action="store_true")
     profile_add_parser.set_defaults(func=app_cli_profiles.command_profile_add)
 
+
+def _register_profile_remove(profile_subparsers):
     profile_remove_parser = profile_subparsers.add_parser(
         "remove", help="Remove a VPN profile and its clients."
     )
@@ -304,6 +384,8 @@ def build_parser() -> argparse.ArgumentParser:
     profile_remove_parser.add_argument("--no-restart", action="store_true")
     profile_remove_parser.set_defaults(func=app_cli_profiles.command_profile_remove)
 
+
+def _register_profile_outbound(profile_subparsers):
     profile_outbound_parser = profile_subparsers.add_parser(
         "outbound", help="Change a profile outbound route."
     )
@@ -314,10 +396,20 @@ def build_parser() -> argparse.ArgumentParser:
     profile_outbound_parser.add_argument("--no-restart", action="store_true")
     profile_outbound_parser.set_defaults(func=app_cli_profiles.command_profile_outbound)
 
+
+def register_client(subparsers):
     client_parser = subparsers.add_parser("client", help="Manage clients.")
     client_subparsers = client_parser.add_subparsers(
         dest="client_command", required=True
     )
+    _register_client_add(client_subparsers)
+    _register_client_remove(client_subparsers)
+    _register_client_list(client_subparsers)
+    _register_client_enable(client_subparsers)
+    _register_client_disable(client_subparsers)
+
+
+def _register_client_add(client_subparsers):
     add_parser = client_subparsers.add_parser("add", help="Add a client.")
     add_parser.add_argument("name")
     add_parser.add_argument(
@@ -331,6 +423,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--no-restart", action="store_true")
     add_parser.set_defaults(func=app_cli_clients.command_client_add)
 
+
+def _register_client_remove(client_subparsers):
     remove_parser = client_subparsers.add_parser("remove", help="Remove a client.")
     remove_parser.add_argument("name_or_id")
     remove_parser.add_argument(
@@ -339,29 +433,39 @@ def build_parser() -> argparse.ArgumentParser:
     remove_parser.add_argument("--no-restart", action="store_true")
     remove_parser.set_defaults(func=app_cli_clients.command_client_remove)
 
+
+def _register_client_list(client_subparsers):
     list_parser = client_subparsers.add_parser("list", help="List clients.")
     list_parser.add_argument("--profile", help="Only list clients in this VPN profile.")
     list_parser.set_defaults(func=app_cli_clients.command_client_list)
 
+
+def _register_client_enable(client_subparsers):
     enable_parser = client_subparsers.add_parser("enable", help="Enable a client.")
     enable_parser.add_argument("name_or_id")
     enable_parser.add_argument("--profile", help="VPN profile containing the client.")
     enable_parser.add_argument("--no-restart", action="store_true")
-    enable_parser.set_defaults(
-        func=lambda args: app_cli_clients.command_client_enabled(args, True)
-    )
+    enable_parser.set_defaults(func=app_cli_clients.command_client_enable)
 
+
+def _register_client_disable(client_subparsers):
     disable_parser = client_subparsers.add_parser("disable", help="Disable a client.")
     disable_parser.add_argument("name_or_id")
     disable_parser.add_argument("--profile", help="VPN profile containing the client.")
     disable_parser.add_argument("--reason", default="manual")
     disable_parser.add_argument("--no-restart", action="store_true")
-    disable_parser.set_defaults(
-        func=lambda args: app_cli_clients.command_client_enabled(args, False)
-    )
+    disable_parser.set_defaults(func=app_cli_clients.command_client_disable)
 
+
+def register_quota(subparsers):
     quota_parser = subparsers.add_parser("quota", help="Manage monthly traffic quotas.")
     quota_subparsers = quota_parser.add_subparsers(dest="quota_command", required=True)
+    _register_quota_set(quota_subparsers)
+    _register_quota_reset(quota_subparsers)
+    _register_quota_enforce(quota_subparsers)
+
+
+def _register_quota_set(quota_subparsers):
     quota_set_parser = quota_subparsers.add_parser(
         "set", help="Set a client monthly quota."
     )
@@ -372,6 +476,8 @@ def build_parser() -> argparse.ArgumentParser:
     quota_set_parser.add_argument("--quota", required=True)
     quota_set_parser.set_defaults(func=app_cli_usage.command_quota_set)
 
+
+def _register_quota_reset(quota_subparsers):
     quota_reset_parser = quota_subparsers.add_parser(
         "reset", help="Reset usage counters for a client."
     )
@@ -385,12 +491,16 @@ def build_parser() -> argparse.ArgumentParser:
     quota_reset_parser.add_argument("--no-restart", action="store_true")
     quota_reset_parser.set_defaults(func=app_cli_usage.command_quota_reset)
 
+
+def _register_quota_enforce(quota_subparsers):
     quota_enforce_parser = quota_subparsers.add_parser(
         "enforce", help="Pull Xray stats and disable clients over monthly quota."
     )
     quota_enforce_parser.add_argument("--no-restart", action="store_true")
     quota_enforce_parser.set_defaults(func=app_cli_usage.command_quota_enforce)
 
+
+def register_usage(subparsers):
     usage_parser = subparsers.add_parser("usage", help="Show persisted usage.")
     usage_parser.add_argument("--profile", help="Only show usage for this VPN profile.")
     usage_parser.add_argument(
@@ -400,6 +510,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     usage_parser.set_defaults(func=app_cli_usage.command_usage)
 
+
+def register_link(subparsers):
     link_parser = subparsers.add_parser("link", help="Print a VLESS link for a client.")
     link_parser.add_argument("name_or_id")
     link_parser.add_argument("--profile", help="VPN profile containing the client.")
@@ -409,6 +521,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     link_parser.set_defaults(func=app_cli_clients.command_link)
 
+
+def register_endpoint(subparsers):
     endpoint_parser = subparsers.add_parser(
         "endpoint", help="Manage independent remote client entries."
     )
@@ -426,6 +540,9 @@ def build_parser() -> argparse.ArgumentParser:
     endpoint_remove = endpoint_subparsers.add_parser("remove")
     endpoint_remove.add_argument("name")
     endpoint_remove.set_defaults(func=app_cli_exports.command_endpoint)
+
+
+def register_subscription(subparsers):
     subscription_parser = subparsers.add_parser(
         "subscription", help="Export a private combined subscription file."
     )
@@ -433,6 +550,8 @@ def build_parser() -> argparse.ArgumentParser:
     subscription_parser.add_argument("--output", type=Path, required=True)
     subscription_parser.set_defaults(func=app_cli_exports.command_subscription)
 
+
+def register_inventory(subparsers):
     inventory_parser = subparsers.add_parser(
         "inventory", help="Manage separate infrastructure metadata."
     )
@@ -448,48 +567,35 @@ def build_parser() -> argparse.ArgumentParser:
             operation_parser.add_argument("--with-runtime", action="store_true")
         operation_parser.set_defaults(func=app_cli_inventory.command_inventory)
 
+
+def register_up(subparsers):
     up_parser = subparsers.add_parser("up", help="Start Xray.")
-    up_parser.set_defaults(
-        func=lambda args: app_cli_runtime.command_compose(args, ["up", "-d"])
-    )
+    up_parser.set_defaults(func=app_cli_runtime.command_up)
+
+
+def register_down(subparsers):
     down_parser = subparsers.add_parser("down", help="Stop Xray.")
-    down_parser.set_defaults(
-        func=lambda args: app_cli_runtime.command_compose(args, ["down"])
-    )
+    down_parser.set_defaults(func=app_cli_runtime.command_down)
+
+
+def register_restart(subparsers):
     restart_parser = subparsers.add_parser("restart", help="Restart Xray.")
-    restart_parser.set_defaults(
-        func=lambda args: app_cli_runtime.command_compose(
-            args, ["restart", app_settings.XRAY_SERVICE]
-        )
-    )
+    restart_parser.set_defaults(func=app_cli_runtime.command_restart)
+
+
+def register_status(subparsers):
     status_parser = subparsers.add_parser("status", help="Show Compose service status.")
-    status_parser.set_defaults(
-        func=lambda args: app_cli_runtime.command_compose(args, ["ps"])
-    )
+    status_parser.set_defaults(func=app_cli_runtime.command_status)
+
+
+def register_logs(subparsers):
     logs_parser = subparsers.add_parser("logs", help="Follow Xray logs.")
     logs_parser.add_argument("-f", "--follow", action="store_true")
-    logs_parser.set_defaults(
-        func=lambda args: app_cli_runtime.command_compose(
-            args, ["logs", *(["-f"] if args.follow else []), app_settings.XRAY_SERVICE]
-        )
-    )
+    logs_parser.set_defaults(func=app_cli_runtime.command_logs)
 
+
+def register_validate(subparsers):
     validate_parser = subparsers.add_parser(
         "validate", help="Validate the rendered Xray config inside the container."
     )
-    validate_parser.set_defaults(
-        func=lambda args: app_cli_runtime.command_compose(
-            args,
-            [
-                "run",
-                "--rm",
-                app_settings.XRAY_SERVICE,
-                "run",
-                "-test",
-                "-config",
-                "/etc/xray/config.json",
-            ],
-        )
-    )
-
-    return parser
+    validate_parser.set_defaults(func=app_cli_runtime.command_validate)

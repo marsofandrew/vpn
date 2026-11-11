@@ -1,0 +1,15 @@
+{
+  "tag": "ny-tls",
+  "listen": "0.0.0.0",
+  "port": 18444,
+  "protocol": "vless",
+  "settings": {
+    "decryption": "none",
+    "clients": [
+      {
+        "id": "$fixture:0"
+      }
+    ]
+  },
+  "streamSettings": "$fixture:1"
+}

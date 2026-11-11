@@ -1,10 +1,9 @@
 import tempfile
-import time
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import vpn_monitor
 import vpn_transports
@@ -12,9 +11,11 @@ from vpn_manager import clock as app_clock
 from vpn_manager import errors as app_errors
 from vpn_manager import keys as app_keys
 from vpn_manager.cli import entrypoint as app_cli_entrypoint
+from vpn_manager.health.service import HealthService
 from vpn_manager.state import creation as app_state_creation
 from vpn_manager.state import storage as app_state_storage
 from vpn_manager.xray import rendering as app_xray_rendering
+from vpn_manager.xray.deployment import default_service
 
 
 class RoutingHealthTests(unittest.TestCase):
@@ -56,25 +57,12 @@ class RoutingHealthTests(unittest.TestCase):
             {"success": primary, "exit_ip_verified": primary, "latency_ms": 5},
             {"success": cdn, "exit_ip_verified": cdn, "latency_ms": 30},
         ]
-        with (
-            redirect_stdout(StringIO()),
-            patch.object(vpn_monitor, "probe_upstream", side_effect=results),
-            patch.object(time, "time", return_value=self.now),
-        ):
-            self.assertEqual(
-                app_cli_entrypoint.main(
-                    [
-                        "--state",
-                        str(self.path),
-                        "--config",
-                        str(self.config),
-                        "health",
-                        "check",
-                        "--no-restart",
-                    ]
-                ),
-                0,
-            )
+        state = app_state_storage.load_state(self.path)
+        service = HealthService(
+            Mock(side_effect=results), lambda: self.now, app_clock.utc_now
+        )
+        service.check(state)
+        default_service().persist(state, self.path, self.config)
         return app_state_storage.load_state(self.path)
 
     def selected(self, state):

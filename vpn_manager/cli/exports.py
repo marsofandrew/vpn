@@ -5,18 +5,17 @@ import vpn_subscriptions
 from vpn_manager import errors as app_errors
 from vpn_manager.exports import links as app_exports_links
 from vpn_manager.state import model as app_state_model
-from vpn_manager.state import storage as app_state_storage
 
 
-def command_endpoint(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_endpoint(args: argparse.Namespace, *, store) -> None:
+    state = store.load(args.state)
     try:
         if args.endpoint_command == "add":
             vpn_subscriptions.add_endpoint(state, args.name, args.client, args.link)
-            app_state_storage.save_state(args.state, state)
+            store.save(args.state, state)
         elif args.endpoint_command == "remove":
             vpn_subscriptions.remove_endpoint(state, args.name)
-            app_state_storage.save_state(args.state, state)
+            store.save(args.state, state)
         else:
             for name, entry in state.get("client_entries", {}).items():
                 endpoint = entry["endpoint"]
@@ -28,8 +27,8 @@ def command_endpoint(args: argparse.Namespace) -> None:
         raise app_errors.VpnctlError(str(error)) from None
 
 
-def command_subscription(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_subscription(args: argparse.Namespace, *, store) -> None:
+    state = store.load(args.state)
     local_links = [
         app_exports_links.generate_vless_link(client, state, profile)
         for profile in app_state_model.all_profiles(state)

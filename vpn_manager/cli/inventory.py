@@ -3,10 +3,9 @@ import argparse
 import vpn_inventory
 from vpn_manager import errors as app_errors
 from vpn_manager import files as app_files
-from vpn_manager.state import storage as app_state_storage
 
 
-def command_inventory(args: argparse.Namespace) -> None:
+def command_inventory(args: argparse.Namespace, *, store) -> None:
     try:
         if args.inventory_command == "example":
             if args.file.exists():
@@ -19,7 +18,7 @@ def command_inventory(args: argparse.Namespace) -> None:
         inventory = app_files.load_json(args.file)
         vpn_inventory.validate_inventory(inventory)
         if args.inventory_command == "validate" and args.with_runtime:
-            state = app_state_storage.load_state(args.state)
+            state = store.load(args.state)
             vpn_inventory.validate_node_references(
                 inventory,
                 [state["node"]["id"], *state.get("upstream_nodes", {}).values()],
@@ -50,8 +49,8 @@ def command_inventory(args: argparse.Namespace) -> None:
         raise app_errors.VpnctlError(str(error)) from None
 
 
-def command_upstream_bind(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_upstream_bind(args: argparse.Namespace, *, store) -> None:
+    state = store.load(args.state)
     if args.name not in state["upstreams"]:
         raise app_errors.VpnctlError("unknown upstream")
     try:
@@ -63,5 +62,5 @@ def command_upstream_bind(args: argparse.Namespace) -> None:
     except ValueError as error:
         raise app_errors.VpnctlError(str(error)) from None
     state.setdefault("upstream_nodes", {})[args.name] = args.node
-    app_state_storage.save_state(args.state, state)
+    store.save(args.state, state)
     print(f"Bound upstream {args.name} to inventory node {args.node}")

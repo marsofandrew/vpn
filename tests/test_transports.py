@@ -17,72 +17,26 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
+
+from fixture_cases import (
+    TEST_TRANSPORTS_REJECTS_INVALID_BASE64_AND_DISCOVERY_INVALID,
+    TEST_TRANSPORTS_STRICT_HOST_AND_PATH_VALIDATION_ON_BOTH_ENTRY_POINTS_BAD_HOSTS,
+    TEST_TRANSPORTS_STRICT_HOST_AND_PATH_VALIDATION_ON_BOTH_ENTRY_POINTS_BAD_PATHS,
+)
+from transport_fixture import (
+    BAD_UPSTREAM_MUTATIONS,
+    CLIENT_ID,
+    ECH_CONFIG,
+    PRIVATE_KEY,
+    PUBLIC_KEY,
+    changed,
+    link,
+    server_security,
+    upstream,
+)
 
 import vpn_transports as transports
-
-CLIENT_ID = "11111111-2222-3333-4444-555555555555"
-PUBLIC_KEY = "pOCSkrZRwni5dyxWn1-puxPZBrRqtoyd-dwrRAn4ogk"
-PRIVATE_KEY = "AAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAUE"
-ECH_CONFIG = base64.b64encode(b"\xfb\xff").decode("ascii")
-
-
-def link(network="tcp", security="reality", **changes):
-    params = {
-        "encryption": "none",
-        "type": network,
-        "security": security,
-        "sni": "example.com",
-    }
-    if security == "reality":
-        params.update(pbk=PUBLIC_KEY, sid="ab12", fp="chrome", spx="/")
-    if network == "xhttp":
-        params.update(
-            path="/vpn/",
-            host="cdn.example.com",
-            mode="stream-one" if security == "reality" else "auto",
-        )
-    params.update(changes)
-    params = {k: v for k, v in params.items() if v is not None}
-    return (
-        "vless://"
-        + CLIENT_ID
-        + "@proxy.example.com:8443?"
-        + urlencode(params, quote_via=quote)
-    )
-
-
-def upstream(network="tcp", security="reality", **changes):
-    return transports.parse_link(link(network, security, **changes))
-
-
-def server_security(security="reality"):
-    if security == "reality":
-        settings = {
-            "server_name": "example.com",
-            "target": "example.com:443",
-            "private_key": PRIVATE_KEY,
-            "short_ids": ["", "ab12"],
-        }
-    else:
-        settings = {
-            "certificates": [
-                {
-                    "certificateFile": "/etc/xray/cert.pem",
-                    "keyFile": "/etc/xray/key.pem",
-                }
-            ]
-        }
-    return {"type": security, "settings": settings}
-
-
-def changed(original, path, value):
-    result = copy.deepcopy(original)
-    node = result
-    for key in path[:-1]:
-        node = node[key]
-    node[path[-1]] = value
-    return result
 
 
 class ParseTests(unittest.TestCase):
@@ -390,50 +344,7 @@ class ValidationTests(unittest.TestCase):
 
     def test_validate_and_render_reject_bad_shapes_and_types(self):
         u = upstream()
-        mutations = [(("protocol",), v) for v in (None, [], "vmess")]
-        mutations += [
-            (("port",), v) for v in (True, False, 0, 65536, -1, "443", 443.0, None)
-        ]
-        mutations += [(("enabled",), v) for v in (0, 1, "true", None)]
-        mutations += [
-            (("auth",), v)
-            for v in (None, [], {}, {"id": CLIENT_ID, "password": "secret"})
-        ]
-        mutations += [(("auth", "id"), v) for v in (None, [], 10, "", "invalid")]
-        mutations += [
-            (("auth", "flow"), v) for v in (None, [], "vision", "xtls-rprx-direct")
-        ]
-        mutations += [(("auth", "encryption"), "aes")]
-        mutations += [
-            (("transport",), v)
-            for v in (
-                None,
-                [],
-                {},
-                {"type": "ws"},
-                {"type": "tcp", "settings": {"host": "example.com"}},
-            )
-        ]
-        mutations += [(("transport", "type"), v) for v in (None, [], {}, "grpc")]
-        mutations += [
-            (("security",), v)
-            for v in (
-                None,
-                [],
-                {},
-                {"type": "tls", "settings": {"server_name": "example.com"}},
-            )
-        ]
-        mutations += [(("security", "type"), v) for v in (None, [], {}, "none")]
-        mutations += [
-            (("security", "settings"), v)
-            for v in (
-                None,
-                [],
-                {},
-                {"server_name": "example.com", "private_key": PRIVATE_KEY},
-            )
-        ]
+        mutations = copy.deepcopy(BAD_UPSTREAM_MUTATIONS)
         for path, value in mutations:
             bad = changed(u, path, value)
             for api in (
@@ -458,47 +369,8 @@ class ValidationTests(unittest.TestCase):
                     transports.validate_upstream(bad)
 
     def test_strict_host_and_path_validation_on_both_entry_points(self):
-        bad_hosts = [
-            "https://example.com",
-            "foo/bar",
-            "foo?bar",
-            "foo#bar",
-            "user@host",
-            "bad host",
-            "example.com\r\nX:a",
-            "a..b",
-            "-host",
-            "host-",
-            "host_foo",
-            "999.0.0.1",
-            "[::1]junk",
-            "[v1.foo]",
-            "host:",
-            "host:0",
-            "host:65536",
-            "::1",
-            "host:abc",
-        ]
-        bad_paths = [
-            "",
-            "relative",
-            "https://example.com/x",
-            "//host/path",
-            "/x#fragment",
-            "/a\\b",
-            "/white space",
-            "/\n",
-            "/%0d%0a",
-            "/bad%",
-            "/bad%GG",
-            "/%FF",
-            "/a/../b",
-            "/%2e%2e/b",
-            "/a/./b",
-            "/%5c",
-            "/%23fragment",
-            "/%2fhost",
-        ]
+        bad_hosts = TEST_TRANSPORTS_STRICT_HOST_AND_PATH_VALIDATION_ON_BOTH_ENTRY_POINTS_BAD_HOSTS
+        bad_paths = TEST_TRANSPORTS_STRICT_HOST_AND_PATH_VALIDATION_ON_BOTH_ENTRY_POINTS_BAD_PATHS
         for field, values in (("host", bad_hosts), ("path", bad_paths)):
             for value in values:
                 with self.subTest(field=field, value=value):
@@ -709,48 +581,7 @@ class ECHTests(unittest.TestCase):
                 transports.validate_upstream(bad)
 
     def test_rejects_invalid_base64_and_discovery(self):
-        invalid = [
-            None,
-            [],
-            {},
-            True,
-            123,
-            " ",
-            "+/8",
-            "+/8==",
-            "-_8=",
-            "+/9=",
-            "=",
-            "!!!!",
-            "éééé",
-            "http://dns.example/dns-query",
-            "udp://1.1.1.1",
-            "h2c://dns.example/dns-query",
-            "https://",
-            "https:///dns-query",
-            "https://user:password@dns.example/dns-query",
-            "https://dns.example:0/dns-query",
-            "https://dns.example:65536/dns-query",
-            "https://dns.example:/dns-query",
-            "https://[::1]junk/dns-query",
-            "https://dns.example/dns-query#frag",
-            "https://dns.example/dns-query#",
-            "https://dns.example/a/../dns-query",
-            "https://dns.example/%0d%0a",
-            "https://dns.example/%GG",
-            "https://dns.example/dns-query?token=%FF",
-            "https://dns.example/dns-query?token=%0a",
-            "https://dns.example/dns-query?token=a+b",
-            "https://dns.example\\evil/dns-query",
-            "https://dns.example/white space",
-            "https://dns.example/dns-query\n",
-            "+https://1.1.1.1/dns-query",
-            "127.0.0.1+https://1.1.1.1/dns-query",
-            "lookup.example:443+https://1.1.1.1/dns-query",
-            "a+b+https://1.1.1.1/dns-query",
-            "lookup.example+http://1.1.1.1/dns-query",
-            "lookup.example+https://1.1.1.1/dns-query?x=a+b",
-        ]
+        invalid = TEST_TRANSPORTS_REJECTS_INVALID_BASE64_AND_DISCOVERY_INVALID
         for value in invalid:
             with self.subTest(value=value):
                 bad = changed(

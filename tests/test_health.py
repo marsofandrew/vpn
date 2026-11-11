@@ -1,12 +1,11 @@
-import ssl
-import time
-
 """Offline tests: real HTTP parsing, in-memory SOCKS peers, mocked TLS boundary."""
 
 import copy
 import json
 import math
 import socket
+import ssl
+import time
 import unittest
 from contextlib import ExitStack
 from unittest.mock import Mock, patch

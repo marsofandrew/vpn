@@ -286,33 +286,7 @@ class ReliabilityTests(unittest.TestCase):
         )
 
     def test_rollover_deployment_rollback_preserves_observed_new_month_usage(self):
-        self.state["usage_period"] = "2099-01"
-        self.snapshot(100, 200)
-        self.client().update(
-            quota_bytes=100, enabled=False, disabled_reason="quota_exceeded"
-        )
-        app_state_storage.save_state(self.state_path, self.state)
-        previous_config = app_xray_rendering.render_config(self.state)
-        app_files.write_json(self.config_path, previous_config)
-        email = self.client()["email"]
-        stats = {
-            "stat": [
-                {"name": f"user>>>{email}>>>traffic>>>uplink", "value": 120},
-                {"name": f"user>>>{email}>>>traffic>>>downlink", "value": 230},
-            ]
-        }
-        args = app_cli_parser.build_parser().parse_args(
-            [
-                "--state",
-                str(self.state_path),
-                "--config",
-                str(self.config_path),
-                "--compose-file",
-                str(self.compose),
-                "quota",
-                "enforce",
-            ]
-        )
+        previous_config, email, stats, args = self._rollover_case()
         with (
             patch.object(app_clock, "current_usage_period", return_value="2099-02"),
             patch.object(app_xray_runtime, "runtime_epoch", return_value="first"),
@@ -331,7 +305,12 @@ class ReliabilityTests(unittest.TestCase):
             ),
         ):
             with self.assertRaisesRegex(app_errors.VpnctlError, "restored"):
-                app_cli_usage.command_quota_enforce(args)
+                app_cli_usage.command_quota_enforce(
+                    args,
+                    store=app_state_storage.JsonStateStore(),
+                    persist=app_xray_deployment.persist_state_and_config,
+                    sample=app_accounting.sample_usage,
+                )
             self.assertEqual(restart.call_count, 2)
             restored = app_state_storage.load_state(self.state_path)
             self.assertEqual(restored["usage_period"], "2099-02")
@@ -361,6 +340,36 @@ class ReliabilityTests(unittest.TestCase):
             app_accounting.sample_usage(restored, self.compose)
         self.assertEqual(self.client(restored)["used_uplink_bytes"], 25)
         self.assertEqual(self.client(restored)["used_downlink_bytes"], 37)
+
+    def _rollover_case(self):
+        self.state["usage_period"] = "2099-01"
+        self.snapshot(100, 200)
+        self.client().update(
+            quota_bytes=100, enabled=False, disabled_reason="quota_exceeded"
+        )
+        app_state_storage.save_state(self.state_path, self.state)
+        previous_config = app_xray_rendering.render_config(self.state)
+        app_files.write_json(self.config_path, previous_config)
+        email = self.client()["email"]
+        stats = {
+            "stat": [
+                {"name": f"user>>>{email}>>>traffic>>>uplink", "value": 120},
+                {"name": f"user>>>{email}>>>traffic>>>downlink", "value": 230},
+            ]
+        }
+        args = app_cli_parser.build_parser().parse_args(
+            [
+                "--state",
+                str(self.state_path),
+                "--config",
+                str(self.config_path),
+                "--compose-file",
+                str(self.compose),
+                "quota",
+                "enforce",
+            ]
+        )
+        return previous_config, email, stats, args
 
     def test_rollback_failure_retains_journal_for_recovery(self):
         self.client()["enabled"] = False

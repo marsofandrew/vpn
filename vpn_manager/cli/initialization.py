@@ -8,12 +8,10 @@ from vpn_manager.exports import links as app_exports_links
 from vpn_manager.state import creation as app_state_creation
 from vpn_manager.state import importing as app_state_importing
 from vpn_manager.state import model as app_state_model
-from vpn_manager.state import storage as app_state_storage
-from vpn_manager.xray import deployment as app_xray_deployment
 from vpn_manager.xray import rendering as app_xray_rendering
 
 
-def command_init(args: argparse.Namespace) -> None:
+def command_init(args: argparse.Namespace, *, store) -> None:
     if args.state.exists() and not args.force:
         raise app_errors.VpnctlError(
             f"state already exists: {args.state}. Use --force to overwrite it."
@@ -33,7 +31,7 @@ def command_init(args: argparse.Namespace) -> None:
         direct_port=args.direct_port,
         proxy_port=args.proxy_port,
     )
-    app_state_storage.save_state(args.state, state)
+    store.save(args.state, state)
     app_xray_rendering.render_and_save_config(state, args.config)
     print(f"State saved to {args.state}")
     print(f"Xray config rendered to {args.config}")
@@ -44,7 +42,7 @@ def command_init(args: argparse.Namespace) -> None:
             )
 
 
-def command_import_config(args: argparse.Namespace) -> None:
+def command_import_config(args: argparse.Namespace, *, store) -> None:
     if args.state.exists() and not args.force:
         raise app_errors.VpnctlError(
             f"state already exists: {args.state}. Use --force to overwrite it."
@@ -53,7 +51,7 @@ def command_import_config(args: argparse.Namespace) -> None:
     state = app_state_importing.import_state_from_xray_config(
         config, args.server_host, args.default_domain
     )
-    app_state_storage.save_state(args.state, state)
+    store.save(args.state, state)
     app_xray_rendering.render_and_save_config(state, args.config)
     print(f"Imported Xray config from {args.input}")
     print(f"State saved to {args.state}")
@@ -65,8 +63,8 @@ def command_import_config(args: argparse.Namespace) -> None:
         )
 
 
-def command_render(args: argparse.Namespace) -> None:
-    state = app_state_storage.load_state(args.state)
+def command_render(args: argparse.Namespace, *, persist, store) -> None:
+    state = store.load(args.state)
     app_accounting.ensure_monthly_period(state)
-    app_xray_deployment.persist_state_and_config(state, args.state, args.config)
+    persist(state, args.state, args.config)
     print(f"Xray config rendered to {args.config}")
