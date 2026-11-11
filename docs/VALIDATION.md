@@ -100,13 +100,44 @@ publisher:
 XRAY_INTEGRATION=1 python3 -m unittest discover -s tests -p test_stabilization_integration.py -v
 ```
 
+## SRP refactor checks (2026-11-11)
+
+- Pre-refactor baseline: 261 discovered, 244 passed, 17 opt-in integration skips.
+- Current suite: 284 discovered, 264 passed, 20 opt-in integration skips. The
+  increase in integration skips comes from splitting the combined deployment
+  scenario into four independent tests; no previous assertions were discarded.
+- Physical-line guard: 855 functions/methods/lambdas, 761 at or below the preferred
+  30 lines, 94 between 31 and 60 with recorded cohesion justifications, zero above
+  the hard 60-line limit. The unit suite enforces the same guard.
+- CLI help/options/defaults, rendered configuration, links, migration metadata
+  and safe errors match synthetic behavior snapshots. New tests also cover CLI
+  dependency bindings, injected workflow boundaries and public API re-exports.
+- Official 26.10.31 release binary: all 35 transport tests passed, including native
+  generated configuration checks. This does not verify the Docker image.
+- Ruff lint and full-project formatting, mypy checks across 60 production/guard
+  sources, compilation, shell syntax and Compose validation passed. The static
+  import graph is acyclic across 59 production modules. Type checks cover annotated
+  boundaries; this is not a claim that every legacy function is strictly typed.
+- Official image pull again failed with GHCR HTTP 403. The ECH integration entry
+  point failed before running a test because that image is unavailable. The five
+  stabilization helper tests passed; its live class explicitly skipped because
+  macOS/Docker Desktop does not support this fixture's native Linux host network.
+- Official-image runtime equivalence, Linux traffic/accounting/failover scenarios
+  and the existing network-deployment gates remain pending. No alternate image,
+  production deployment, remote push or acceptance tag was used.
+
+See [REFACTORING.md](REFACTORING.md) for package boundaries, internal API changes,
+rollback guidance and the size policy. Install or restore the complete checkout,
+including `vpn_manager`; the schema remains v4 and no data migration is needed.
+
 ## Repeatable checks
 
 ```sh
 python3 -m pip install -r requirements-dev.txt
 ruff check --select F,E9 .
-ruff format --check vpn_*.py
-mypy --ignore-missing-imports vpn_transports.py vpn_health.py vpn_monitor.py vpn_subscriptions.py vpn_inventory.py vpn_validation.py
+ruff format --check .
+mypy --ignore-missing-imports vpn_manager vpnctl.py vpn_*.py scripts/check_function_size.py
+python3 scripts/check_function_size.py
 python3 -m unittest discover -s tests -v
 docker compose config -q
 docker pull ghcr.io/xtls/xray-core:26.10.31
@@ -116,8 +147,9 @@ docker run --rm aquasec/trivy:0.61.1 image --scanners vuln --severity HIGH,CRITI
 ```
 
 Integration tests create temporary local fixtures and containers; port 10085
-must be free. Formatting/type checks cover the new modules; legacy CLI style is
-preserved. Validation is manual: no GitHub Actions workflow is configured.
+must be free. Formatting checks cover all project Python sources; type checks
+cover annotated package, facade and guard boundaries. Validation is manual: no
+GitHub Actions workflow is configured.
 The commands above run unit/migration/native/runtime checks, Compose validation
 and dependency/image audits locally. Security findings are not suppressed.
 Do not deploy until the official-image gate and the documented staged network
