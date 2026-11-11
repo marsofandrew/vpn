@@ -1,0 +1,73 @@
+{
+  "version": 4,
+  "created_at": "2026-11-01T00:00:00+00:00",
+  "updated_at": "2026-11-01T00:00:00+00:00",
+  "usage_period": "2026-11",
+  "server_host": "vpn.example.invalid",
+  "default_domain": "example.invalid",
+  "fingerprint": "chrome",
+  "flow": "xtls-rprx-vision",
+  "spider_x": "/",
+  "profiles": [
+    {
+      "name": "default",
+      "created_at": "2026-11-01T00:00:00+00:00",
+      "updated_at": "2026-11-01T00:00:00+00:00",
+      "port": 443,
+      "reality_target": "www.example.invalid:443",
+      "outbound_mode": "direct",
+      "short_id": "0123456789abcdef",
+      "keys": {
+        "private_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "public_key": "j0DFrbaPJWJK5bIU6nZ6bslNgp09e14a0bpvPiE4KF8"
+      },
+      "clients": [
+        {
+          "name": "fixture",
+          "id": "11111111-2222-4333-8444-555555555555",
+          "email": "fixture@example.invalid",
+          "enabled": true,
+          "quota_bytes": 2048,
+          "used_uplink_bytes": 123,
+          "used_downlink_bytes": 0,
+          "created_at": "2026-11-01T00:00:00+00:00",
+          "updated_at": "2026-11-01T00:00:00+00:00",
+          "disabled_reason": null
+        }
+      ],
+      "transport": {
+        "type": "tcp",
+        "settings": {}
+      },
+      "route": "direct"
+    }
+  ],
+  "node": {
+    "id": "local",
+    "role": "both"
+  },
+  "upstreams": {},
+  "routing_policies": {
+    "direct": {
+      "type": "direct"
+    },
+    "block": {
+      "type": "block"
+    }
+  },
+  "accounting": {
+    "epoch": "synthetic-epoch",
+    "checkpoints": {
+      "fixture@example.invalid": {
+        "uplink": 123,
+        "downlink": 0
+      }
+    }
+  },
+  "metadata": {
+    "owner": "synthetic fixture",
+    "future": [
+      "preserve"
+    ]
+  }
+}

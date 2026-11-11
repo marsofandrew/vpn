@@ -1,0 +1,2501 @@
+{
+  "help": "usage: vpnctl.py [-h] [--state STATE] [--config CONFIG]\n                 [--compose-file COMPOSE_FILE]\n                 {init,import-config,render,upstream,route,policy,node,health,profile,client,quota,usage,link,endpoint,subscription,inventory,up,down,restart,status,logs,validate} ...\n\nManage a Docker Compose Xray VLESS + REALITY VPN server.\n\npositional arguments:\n  {init,import-config,render,upstream,route,policy,node,health,profile,client,quota,usage,link,endpoint,subscription,inventory,up,down,restart,status,logs,validate}\n    init                Create state and render the initial Xray config.\n    import-config       Import an existing Xray JSON config into vpnctl state.\n    render              Render config from state.\n    upstream            Show or change the upstream VPN.\n    route               Assign profile routing policies.\n    policy              Manage named routing policies.\n    node                Configure local node role and routing guard.\n    health              Inspect or probe upstream paths on this gateway.\n    profile             Manage VPN profiles.\n    client              Manage clients.\n    quota               Manage monthly traffic quotas.\n    usage               Show persisted usage.\n    link                Print a VLESS link for a client.\n    endpoint            Manage independent remote client entries.\n    subscription        Export a private combined subscription file.\n    inventory           Manage separate infrastructure metadata.\n    up                  Start Xray.\n    down                Stop Xray.\n    restart             Restart Xray.\n    status              Show Compose service status.\n    logs                Follow Xray logs.\n    validate            Validate the rendered Xray config inside the\n                        container.\n\noptions:\n  -h, --help            show this help message and exit\n  --state STATE         Path to vpnctl state JSON.\n  --config CONFIG       Path to rendered Xray config JSON.\n  --compose-file COMPOSE_FILE\n                        Path to Docker Compose file.\n",
+  "actions": [
+    {
+      "options": [
+        "-h",
+        "--help"
+      ],
+      "dest": "help",
+      "default": "==SUPPRESS==",
+      "required": false,
+      "nargs": 0,
+      "choices": [],
+      "type": null
+    },
+    {
+      "options": [
+        "--state"
+      ],
+      "dest": "state",
+      "default": "data/vpn_state.json",
+      "required": false,
+      "nargs": null,
+      "choices": [],
+      "type": "Path"
+    },
+    {
+      "options": [
+        "--config"
+      ],
+      "dest": "config",
+      "default": "data/config.json",
+      "required": false,
+      "nargs": null,
+      "choices": [],
+      "type": "Path"
+    },
+    {
+      "options": [
+        "--compose-file"
+      ],
+      "dest": "compose_file",
+      "default": "docker-compose.yaml",
+      "required": false,
+      "nargs": null,
+      "choices": [],
+      "type": "Path"
+    },
+    {
+      "options": [],
+      "dest": "command",
+      "default": null,
+      "required": true,
+      "nargs": "A...",
+      "choices": [
+        "init",
+        "import-config",
+        "render",
+        "upstream",
+        "route",
+        "policy",
+        "node",
+        "health",
+        "profile",
+        "client",
+        "quota",
+        "usage",
+        "link",
+        "endpoint",
+        "subscription",
+        "inventory",
+        "up",
+        "down",
+        "restart",
+        "status",
+        "logs",
+        "validate"
+      ],
+      "type": null
+    }
+  ],
+  "children": {
+    "init": {
+      "help": "usage: vpnctl.py init [-h] --server-host SERVER_HOST\n                      [--upstream-link UPSTREAM_LINK]\n                      --reality-target REALITY_TARGET\n                      [--default-domain DEFAULT_DOMAIN]\n                      [--mode {direct,proxy,both}] [--port PORT]\n                      [--direct-port DIRECT_PORT] [--proxy-port PROXY_PORT]\n                      [--profile PROFILE] --client CLIENT [--quota QUOTA]\n                      [--force]\n\noptions:\n  -h, --help            show this help message and exit\n  --server-host SERVER_HOST\n                        Public IP or DNS name clients connect to.\n  --upstream-link UPSTREAM_LINK\n                        VLESS + REALITY client link for an upstream VPN.\n  --reality-target REALITY_TARGET\n                        REALITY target, for example www.cloudflare.com:443.\n  --default-domain DEFAULT_DOMAIN\n                        Domain used in generated client emails. Defaults to\n                        server host.\n  --mode {direct,proxy,both}\n                        Initial outbound profile mode.\n  --port PORT           Public VLESS port for direct-only or proxy-only init.\n                        Defaults to 443.\n  --direct-port DIRECT_PORT\n                        Public VLESS port for the direct profile in both mode.\n  --proxy-port PROXY_PORT\n                        Public VLESS port for the proxy profile in both mode.\n  --profile PROFILE     Initial profile name for direct-only or proxy-only\n                        init.\n  --client CLIENT       Initial client name. Repeatable.\n  --quota QUOTA         Optional initial monthly quota for all created\n                        clients, for example 50GiB.\n  --force               Overwrite existing state.\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--server-host"
+          ],
+          "dest": "server_host",
+          "default": null,
+          "required": true,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--upstream-link"
+          ],
+          "dest": "upstream_link",
+          "default": null,
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--reality-target"
+          ],
+          "dest": "reality_target",
+          "default": null,
+          "required": true,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--default-domain"
+          ],
+          "dest": "default_domain",
+          "default": null,
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--mode"
+          ],
+          "dest": "mode",
+          "default": "direct",
+          "required": false,
+          "nargs": null,
+          "choices": [
+            "direct",
+            "proxy",
+            "both"
+          ],
+          "type": null
+        },
+        {
+          "options": [
+            "--port"
+          ],
+          "dest": "port",
+          "default": null,
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": "parse_port"
+        },
+        {
+          "options": [
+            "--direct-port"
+          ],
+          "dest": "direct_port",
+          "default": 443,
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": "parse_port"
+        },
+        {
+          "options": [
+            "--proxy-port"
+          ],
+          "dest": "proxy_port",
+          "default": 8443,
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": "parse_port"
+        },
+        {
+          "options": [
+            "--profile"
+          ],
+          "dest": "profile",
+          "default": "default",
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--client"
+          ],
+          "dest": "client",
+          "default": null,
+          "required": true,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--quota"
+          ],
+          "dest": "quota",
+          "default": null,
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--force"
+          ],
+          "dest": "force",
+          "default": false,
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    },
+    "import-config": {
+      "help": "usage: vpnctl.py import-config [-h] --input INPUT --server-host SERVER_HOST\n                               [--default-domain DEFAULT_DOMAIN] [--force]\n\noptions:\n  -h, --help            show this help message and exit\n  --input INPUT         Existing Xray config JSON to import.\n  --server-host SERVER_HOST\n                        Public IP or DNS name clients connect to.\n  --default-domain DEFAULT_DOMAIN\n                        Domain used in imported client emails. Defaults to\n                        inferred email domain or server host.\n  --force               Overwrite existing state.\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--input"
+          ],
+          "dest": "input",
+          "default": null,
+          "required": true,
+          "nargs": null,
+          "choices": [],
+          "type": "Path"
+        },
+        {
+          "options": [
+            "--server-host"
+          ],
+          "dest": "server_host",
+          "default": null,
+          "required": true,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--default-domain"
+          ],
+          "dest": "default_domain",
+          "default": null,
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--force"
+          ],
+          "dest": "force",
+          "default": false,
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    },
+    "render": {
+      "help": "usage: vpnctl.py render [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    },
+    "upstream": {
+      "help": "usage: vpnctl.py upstream [-h]\n                          {show,set,clear,list,bind,add,remove,enable,disable} ...\n\npositional arguments:\n  {show,set,clear,list,bind,add,remove,enable,disable}\n    show                Show the configured upstream without printing UUIDs.\n    set                 Replace the upstream VPN link.\n    clear               Clear upstream when no proxy profiles exist.\n    list                List named upstreams.\n    bind                Associate an upstream with inventory metadata.\n\noptions:\n  -h, --help            show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "upstream_command",
+          "default": null,
+          "required": true,
+          "nargs": "A...",
+          "choices": [
+            "show",
+            "set",
+            "clear",
+            "list",
+            "bind",
+            "add",
+            "remove",
+            "enable",
+            "disable"
+          ],
+          "type": null
+        }
+      ],
+      "children": {
+        "show": {
+          "help": "usage: vpnctl.py upstream show [-h] [name]\n\npositional arguments:\n  name\n\noptions:\n  -h, --help  show this help message and exit\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": "main_vpn",
+              "required": false,
+              "nargs": "?",
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "set": {
+          "help": "usage: vpnctl.py upstream set [-h] --link LINK [--no-restart]\n\noptions:\n  -h, --help    show this help message and exit\n  --link LINK   VLESS + REALITY client link for an upstream VPN.\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--link"
+              ],
+              "dest": "link",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "clear": {
+          "help": "usage: vpnctl.py upstream clear [-h] [--no-restart]\n\noptions:\n  -h, --help    show this help message and exit\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "list": {
+          "help": "usage: vpnctl.py upstream list [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "bind": {
+          "help": "usage: vpnctl.py upstream bind [-h] --node NODE --inventory INVENTORY name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help            show this help message and exit\n  --node NODE\n  --inventory INVENTORY\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--node"
+              ],
+              "dest": "node",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--inventory"
+              ],
+              "dest": "inventory",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": "Path"
+            }
+          ],
+          "children": {}
+        },
+        "add": {
+          "help": "usage: vpnctl.py upstream add [-h] [--no-restart] --link LINK name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help    show this help message and exit\n  --no-restart\n  --link LINK\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--link"
+              ],
+              "dest": "link",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "remove": {
+          "help": "usage: vpnctl.py upstream remove [-h] [--no-restart] name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help    show this help message and exit\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "enable": {
+          "help": "usage: vpnctl.py upstream enable [-h] [--no-restart] name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help    show this help message and exit\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "disable": {
+          "help": "usage: vpnctl.py upstream disable [-h] [--no-restart] name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help    show this help message and exit\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "route": {
+      "help": "usage: vpnctl.py route [-h] {show,set} ...\n\npositional arguments:\n  {show,set}\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "route_command",
+          "default": null,
+          "required": true,
+          "nargs": "A...",
+          "choices": [
+            "show",
+            "set"
+          ],
+          "type": null
+        }
+      ],
+      "children": {
+        "show": {
+          "help": "usage: vpnctl.py route show [-h] profile\n\npositional arguments:\n  profile\n\noptions:\n  -h, --help  show this help message and exit\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "profile",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "set": {
+          "help": "usage: vpnctl.py route set [-h] --policy POLICY [--no-restart] profile\n\npositional arguments:\n  profile\n\noptions:\n  -h, --help       show this help message and exit\n  --policy POLICY\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "profile",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--policy"
+              ],
+              "dest": "policy",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "policy": {
+      "help": "usage: vpnctl.py policy [-h] {list,set} ...\n\npositional arguments:\n  {list,set}\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "policy_command",
+          "default": null,
+          "required": true,
+          "nargs": "A...",
+          "choices": [
+            "list",
+            "set"
+          ],
+          "type": null
+        }
+      ],
+      "children": {
+        "list": {
+          "help": "usage: vpnctl.py policy list [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "set": {
+          "help": "usage: vpnctl.py policy set [-h]\n                            --type {direct,block,upstream,balanced,priority}\n                            [--upstream UPSTREAM] [--cooldown COOLDOWN]\n                            [--no-restart]\n                            name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help            show this help message and exit\n  --type {direct,block,upstream,balanced,priority}\n  --upstream UPSTREAM\n  --cooldown COOLDOWN\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--type"
+              ],
+              "dest": "type",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [
+                "direct",
+                "block",
+                "upstream",
+                "balanced",
+                "priority"
+              ],
+              "type": null
+            },
+            {
+              "options": [
+                "--upstream"
+              ],
+              "dest": "upstream",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--cooldown"
+              ],
+              "dest": "cooldown",
+              "default": 60,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": "float"
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "node": {
+      "help": "usage: vpnctl.py node [-h] --id ID --role {gateway,exit,both} [--foreign-only]\n                      [--no-restart]\n\noptions:\n  -h, --help            show this help message and exit\n  --id ID\n  --role {gateway,exit,both}\n  --foreign-only\n  --no-restart\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--id"
+          ],
+          "dest": "id",
+          "default": null,
+          "required": true,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--role"
+          ],
+          "dest": "role",
+          "default": null,
+          "required": true,
+          "nargs": null,
+          "choices": [
+            "gateway",
+            "exit",
+            "both"
+          ],
+          "type": null
+        },
+        {
+          "options": [
+            "--foreign-only"
+          ],
+          "dest": "foreign_only",
+          "default": false,
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--no-restart"
+          ],
+          "dest": "no_restart",
+          "default": false,
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    },
+    "health": {
+      "help": "usage: vpnctl.py health [-h] {events,check,configure} ...\n\npositional arguments:\n  {events,check,configure}\n\noptions:\n  -h, --help            show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "health_command",
+          "default": null,
+          "required": false,
+          "nargs": "A...",
+          "choices": [
+            "events",
+            "check",
+            "configure"
+          ],
+          "type": null
+        }
+      ],
+      "children": {
+        "events": {
+          "help": "usage: vpnctl.py health events [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "check": {
+          "help": "usage: vpnctl.py health check [-h] [--no-restart]\n\noptions:\n  -h, --help    show this help message and exit\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "configure": {
+          "help": "usage: vpnctl.py health configure [-h] --download-url DOWNLOAD_URL\n                                  --egress-url EGRESS_URL\n                                  --expected-exit-ip EXPECTED_EXIT_IP\n                                  [--interval INTERVAL]\n                                  [--fail-threshold FAIL_THRESHOLD]\n                                  [--success-threshold SUCCESS_THRESHOLD]\n                                  [--timeout TIMEOUT]\n                                  [--bytes-required {131072,1048576}]\n                                  name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help            show this help message and exit\n  --download-url DOWNLOAD_URL\n  --egress-url EGRESS_URL\n  --expected-exit-ip EXPECTED_EXIT_IP\n  --interval INTERVAL\n  --fail-threshold FAIL_THRESHOLD\n  --success-threshold SUCCESS_THRESHOLD\n  --timeout TIMEOUT\n  --bytes-required {131072,1048576}\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--download-url"
+              ],
+              "dest": "download_url",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--egress-url"
+              ],
+              "dest": "egress_url",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--expected-exit-ip"
+              ],
+              "dest": "expected_exit_ip",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--interval"
+              ],
+              "dest": "interval",
+              "default": 30,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": "float"
+            },
+            {
+              "options": [
+                "--fail-threshold"
+              ],
+              "dest": "fail_threshold",
+              "default": 3,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": "int"
+            },
+            {
+              "options": [
+                "--success-threshold"
+              ],
+              "dest": "success_threshold",
+              "default": 3,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": "int"
+            },
+            {
+              "options": [
+                "--timeout"
+              ],
+              "dest": "timeout",
+              "default": 15,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": "float"
+            },
+            {
+              "options": [
+                "--bytes-required"
+              ],
+              "dest": "bytes_required",
+              "default": 131072,
+              "required": false,
+              "nargs": null,
+              "choices": [
+                131072,
+                1048576
+              ],
+              "type": "int"
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "profile": {
+      "help": "usage: vpnctl.py profile [-h] {list,add,remove,outbound} ...\n\npositional arguments:\n  {list,add,remove,outbound}\n    list                List VPN profiles.\n    add                 Add a VPN profile on another port.\n    remove              Remove a VPN profile and its clients.\n    outbound            Change a profile outbound route.\n\noptions:\n  -h, --help            show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "profile_command",
+          "default": null,
+          "required": true,
+          "nargs": "A...",
+          "choices": [
+            "list",
+            "add",
+            "remove",
+            "outbound"
+          ],
+          "type": null
+        }
+      ],
+      "children": {
+        "list": {
+          "help": "usage: vpnctl.py profile list [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "add": {
+          "help": "usage: vpnctl.py profile add [-h] --port PORT [--outbound {direct,proxy}]\n                             [--reality-target REALITY_TARGET]\n                             [--transport {tcp,xhttp}]\n                             [--security {reality,tls}] [--path PATH]\n                             [--host HOST]\n                             [--xhttp-mode {auto,packet-up,stream-up,stream-one}]\n                             [--tls-server-name TLS_SERVER_NAME]\n                             [--certificate CERTIFICATE]\n                             [--certificate-key CERTIFICATE_KEY]\n                             [--ech-server-keys-file ECH_SERVER_KEYS_FILE]\n                             [--ech-config-list-file ECH_CONFIG_LIST_FILE]\n                             [--client CLIENT] [--quota QUOTA] [--no-restart]\n                             name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help            show this help message and exit\n  --port PORT           Public VLESS port for this profile.\n  --outbound {direct,proxy}\n                        Outbound route for this profile.\n  --reality-target REALITY_TARGET\n                        REALITY target.\n  --transport {tcp,xhttp}\n  --security {reality,tls}\n  --path PATH\n  --host HOST\n  --xhttp-mode {auto,packet-up,stream-up,stream-one}\n  --tls-server-name TLS_SERVER_NAME\n  --certificate CERTIFICATE\n  --certificate-key CERTIFICATE_KEY\n  --ech-server-keys-file ECH_SERVER_KEYS_FILE\n  --ech-config-list-file ECH_CONFIG_LIST_FILE\n  --client CLIENT       Initial client name. Repeatable.\n  --quota QUOTA         Optional initial monthly quota for created clients,\n                        for example 50GiB.\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--port"
+              ],
+              "dest": "port",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": "parse_port"
+            },
+            {
+              "options": [
+                "--outbound"
+              ],
+              "dest": "outbound",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [
+                "direct",
+                "proxy"
+              ],
+              "type": null
+            },
+            {
+              "options": [
+                "--reality-target"
+              ],
+              "dest": "reality_target",
+              "default": "www.cloudflare.com:443",
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--transport"
+              ],
+              "dest": "transport",
+              "default": "tcp",
+              "required": false,
+              "nargs": null,
+              "choices": [
+                "tcp",
+                "xhttp"
+              ],
+              "type": null
+            },
+            {
+              "options": [
+                "--security"
+              ],
+              "dest": "security",
+              "default": "reality",
+              "required": false,
+              "nargs": null,
+              "choices": [
+                "reality",
+                "tls"
+              ],
+              "type": null
+            },
+            {
+              "options": [
+                "--path"
+              ],
+              "dest": "path",
+              "default": "/",
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--host"
+              ],
+              "dest": "host",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--xhttp-mode"
+              ],
+              "dest": "xhttp_mode",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [
+                "auto",
+                "packet-up",
+                "stream-up",
+                "stream-one"
+              ],
+              "type": null
+            },
+            {
+              "options": [
+                "--tls-server-name"
+              ],
+              "dest": "tls_server_name",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--certificate"
+              ],
+              "dest": "certificate",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--certificate-key"
+              ],
+              "dest": "certificate_key",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--ech-server-keys-file"
+              ],
+              "dest": "ech_server_keys_file",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": "Path"
+            },
+            {
+              "options": [
+                "--ech-config-list-file"
+              ],
+              "dest": "ech_config_list_file",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": "Path"
+            },
+            {
+              "options": [
+                "--client"
+              ],
+              "dest": "client",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--quota"
+              ],
+              "dest": "quota",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "remove": {
+          "help": "usage: vpnctl.py profile remove [-h] [--no-restart] name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help    show this help message and exit\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "outbound": {
+          "help": "usage: vpnctl.py profile outbound [-h] --outbound {direct,proxy}\n                                  [--no-restart]\n                                  name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help            show this help message and exit\n  --outbound {direct,proxy}\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--outbound"
+              ],
+              "dest": "outbound",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [
+                "direct",
+                "proxy"
+              ],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "client": {
+      "help": "usage: vpnctl.py client [-h] {add,remove,list,enable,disable} ...\n\npositional arguments:\n  {add,remove,list,enable,disable}\n    add                 Add a client.\n    remove              Remove a client.\n    list                List clients.\n    enable              Enable a client.\n    disable             Disable a client.\n\noptions:\n  -h, --help            show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "client_command",
+          "default": null,
+          "required": true,
+          "nargs": "A...",
+          "choices": [
+            "add",
+            "remove",
+            "list",
+            "enable",
+            "disable"
+          ],
+          "type": null
+        }
+      ],
+      "children": {
+        "add": {
+          "help": "usage: vpnctl.py client add [-h] [--profile PROFILE] [--quota QUOTA]\n                            [--no-restart]\n                            name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help         show this help message and exit\n  --profile PROFILE  VPN profile to add the client to.\n  --quota QUOTA      Optional monthly quota, for example 50GiB.\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--profile"
+              ],
+              "dest": "profile",
+              "default": "default",
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--quota"
+              ],
+              "dest": "quota",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "remove": {
+          "help": "usage: vpnctl.py client remove [-h] [--profile PROFILE] [--no-restart]\n                               name_or_id\n\npositional arguments:\n  name_or_id\n\noptions:\n  -h, --help         show this help message and exit\n  --profile PROFILE  VPN profile to remove the client from.\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name_or_id",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--profile"
+              ],
+              "dest": "profile",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "list": {
+          "help": "usage: vpnctl.py client list [-h] [--profile PROFILE]\n\noptions:\n  -h, --help         show this help message and exit\n  --profile PROFILE  Only list clients in this VPN profile.\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--profile"
+              ],
+              "dest": "profile",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "enable": {
+          "help": "usage: vpnctl.py client enable [-h] [--profile PROFILE] [--no-restart]\n                               name_or_id\n\npositional arguments:\n  name_or_id\n\noptions:\n  -h, --help         show this help message and exit\n  --profile PROFILE  VPN profile containing the client.\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name_or_id",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--profile"
+              ],
+              "dest": "profile",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "disable": {
+          "help": "usage: vpnctl.py client disable [-h] [--profile PROFILE] [--reason REASON]\n                                [--no-restart]\n                                name_or_id\n\npositional arguments:\n  name_or_id\n\noptions:\n  -h, --help         show this help message and exit\n  --profile PROFILE  VPN profile containing the client.\n  --reason REASON\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name_or_id",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--profile"
+              ],
+              "dest": "profile",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--reason"
+              ],
+              "dest": "reason",
+              "default": "manual",
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "quota": {
+      "help": "usage: vpnctl.py quota [-h] {set,reset,enforce} ...\n\npositional arguments:\n  {set,reset,enforce}\n    set                Set a client monthly quota.\n    reset              Reset usage counters for a client.\n    enforce            Pull Xray stats and disable clients over monthly quota.\n\noptions:\n  -h, --help           show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "quota_command",
+          "default": null,
+          "required": true,
+          "nargs": "A...",
+          "choices": [
+            "set",
+            "reset",
+            "enforce"
+          ],
+          "type": null
+        }
+      ],
+      "children": {
+        "set": {
+          "help": "usage: vpnctl.py quota set [-h] [--profile PROFILE] --quota QUOTA name_or_id\n\npositional arguments:\n  name_or_id\n\noptions:\n  -h, --help         show this help message and exit\n  --profile PROFILE  VPN profile containing the client.\n  --quota QUOTA\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name_or_id",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--profile"
+              ],
+              "dest": "profile",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--quota"
+              ],
+              "dest": "quota",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "reset": {
+          "help": "usage: vpnctl.py quota reset [-h] [--profile PROFILE] [--enable]\n                             [--no-restart]\n                             name_or_id\n\npositional arguments:\n  name_or_id\n\noptions:\n  -h, --help         show this help message and exit\n  --profile PROFILE  VPN profile containing the client.\n  --enable           Enable the client after resetting usage.\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name_or_id",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--profile"
+              ],
+              "dest": "profile",
+              "default": null,
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--enable"
+              ],
+              "dest": "enable",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "enforce": {
+          "help": "usage: vpnctl.py quota enforce [-h] [--no-restart]\n\noptions:\n  -h, --help    show this help message and exit\n  --no-restart\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--no-restart"
+              ],
+              "dest": "no_restart",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "usage": {
+      "help": "usage: vpnctl.py usage [-h] [--profile PROFILE] [--refresh]\n\noptions:\n  -h, --help         show this help message and exit\n  --profile PROFILE  Only show usage for this VPN profile.\n  --refresh          Read current Xray counters before printing.\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--profile"
+          ],
+          "dest": "profile",
+          "default": null,
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--refresh"
+          ],
+          "dest": "refresh",
+          "default": false,
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    },
+    "link": {
+      "help": "usage: vpnctl.py link [-h] [--profile PROFILE] [--qr] [--output OUTPUT]\n                      name_or_id\n\npositional arguments:\n  name_or_id\n\noptions:\n  -h, --help         show this help message and exit\n  --profile PROFILE  VPN profile containing the client.\n  --qr               Write a QR code PNG.\n  --output OUTPUT    QR output directory.\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "name_or_id",
+          "default": null,
+          "required": true,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--profile"
+          ],
+          "dest": "profile",
+          "default": null,
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--qr"
+          ],
+          "dest": "qr",
+          "default": false,
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--output"
+          ],
+          "dest": "output",
+          "default": "qrcodes",
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": "Path"
+        }
+      ],
+      "children": {}
+    },
+    "endpoint": {
+      "help": "usage: vpnctl.py endpoint [-h] {list,add,remove} ...\n\npositional arguments:\n  {list,add,remove}\n\noptions:\n  -h, --help         show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "endpoint_command",
+          "default": null,
+          "required": true,
+          "nargs": "A...",
+          "choices": [
+            "list",
+            "add",
+            "remove"
+          ],
+          "type": null
+        }
+      ],
+      "children": {
+        "list": {
+          "help": "usage: vpnctl.py endpoint list [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "add": {
+          "help": "usage: vpnctl.py endpoint add [-h] --client CLIENT --link LINK name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help       show this help message and exit\n  --client CLIENT\n  --link LINK\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--client"
+              ],
+              "dest": "client",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--link"
+              ],
+              "dest": "link",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "remove": {
+          "help": "usage: vpnctl.py endpoint remove [-h] name\n\npositional arguments:\n  name\n\noptions:\n  -h, --help  show this help message and exit\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [],
+              "dest": "name",
+              "default": null,
+              "required": true,
+              "nargs": null,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "subscription": {
+      "help": "usage: vpnctl.py subscription [-h] --output OUTPUT client\n\npositional arguments:\n  client\n\noptions:\n  -h, --help       show this help message and exit\n  --output OUTPUT\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "client",
+          "default": null,
+          "required": true,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--output"
+          ],
+          "dest": "output",
+          "default": null,
+          "required": true,
+          "nargs": null,
+          "choices": [],
+          "type": "Path"
+        }
+      ],
+      "children": {}
+    },
+    "inventory": {
+      "help": "usage: vpnctl.py inventory [-h] {example,validate,list} ...\n\npositional arguments:\n  {example,validate,list}\n\noptions:\n  -h, --help            show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [],
+          "dest": "inventory_command",
+          "default": null,
+          "required": true,
+          "nargs": "A...",
+          "choices": [
+            "example",
+            "validate",
+            "list"
+          ],
+          "type": null
+        }
+      ],
+      "children": {
+        "example": {
+          "help": "usage: vpnctl.py inventory example [-h] [--file FILE]\n\noptions:\n  -h, --help   show this help message and exit\n  --file FILE\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--file"
+              ],
+              "dest": "file",
+              "default": "data/inventory.json",
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": "Path"
+            }
+          ],
+          "children": {}
+        },
+        "validate": {
+          "help": "usage: vpnctl.py inventory validate [-h] [--file FILE] [--with-runtime]\n\noptions:\n  -h, --help      show this help message and exit\n  --file FILE\n  --with-runtime\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--file"
+              ],
+              "dest": "file",
+              "default": "data/inventory.json",
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": "Path"
+            },
+            {
+              "options": [
+                "--with-runtime"
+              ],
+              "dest": "with_runtime",
+              "default": false,
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            }
+          ],
+          "children": {}
+        },
+        "list": {
+          "help": "usage: vpnctl.py inventory list [-h] [--file FILE]\n\noptions:\n  -h, --help   show this help message and exit\n  --file FILE\n",
+          "actions": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "dest": "help",
+              "default": "==SUPPRESS==",
+              "required": false,
+              "nargs": 0,
+              "choices": [],
+              "type": null
+            },
+            {
+              "options": [
+                "--file"
+              ],
+              "dest": "file",
+              "default": "data/inventory.json",
+              "required": false,
+              "nargs": null,
+              "choices": [],
+              "type": "Path"
+            }
+          ],
+          "children": {}
+        }
+      }
+    },
+    "up": {
+      "help": "usage: vpnctl.py up [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    },
+    "down": {
+      "help": "usage: vpnctl.py down [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    },
+    "restart": {
+      "help": "usage: vpnctl.py restart [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    },
+    "status": {
+      "help": "usage: vpnctl.py status [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    },
+    "logs": {
+      "help": "usage: vpnctl.py logs [-h] [-f]\n\noptions:\n  -h, --help    show this help message and exit\n  -f, --follow\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "-f",
+            "--follow"
+          ],
+          "dest": "follow",
+          "default": false,
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    },
+    "validate": {
+      "help": "usage: vpnctl.py validate [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "actions": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "dest": "help",
+          "default": "==SUPPRESS==",
+          "required": false,
+          "nargs": 0,
+          "choices": [],
+          "type": null
+        }
+      ],
+      "children": {}
+    }
+  }
+}

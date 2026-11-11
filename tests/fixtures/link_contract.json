@@ -1,0 +1,3 @@
+{
+  "link": "vless://11111111-2222-4333-8444-555555555555@vpn.example.invalid:443?type=tcp&encryption=none&security=reality&pbk=j0DFrbaPJWJK5bIU6nZ6bslNgp09e14a0bpvPiE4KF8&fp=chrome&sni=www.example.invalid&sid=0123456789abcdef&spx=%2F&flow=xtls-rprx-vision#default%3Afixture"
+}
