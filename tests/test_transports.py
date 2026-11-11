@@ -13,14 +13,13 @@ import base64
 import copy
 import json
 import os
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 import vpn_transports as transports
-
 
 CLIENT_ID = "11111111-2222-3333-4444-555555555555"
 PUBLIC_KEY = "pOCSkrZRwni5dyxWn1-puxPZBrRqtoyd-dwrRAn4ogk"
@@ -29,15 +28,28 @@ ECH_CONFIG = base64.b64encode(b"\xfb\xff").decode("ascii")
 
 
 def link(network="tcp", security="reality", **changes):
-    params = {"encryption": "none", "type": network, "security": security,
-              "sni": "example.com"}
+    params = {
+        "encryption": "none",
+        "type": network,
+        "security": security,
+        "sni": "example.com",
+    }
     if security == "reality":
         params.update(pbk=PUBLIC_KEY, sid="ab12", fp="chrome", spx="/")
     if network == "xhttp":
-        params.update(path="/vpn/", host="cdn.example.com", mode="stream-one" if security == "reality" else "auto")
+        params.update(
+            path="/vpn/",
+            host="cdn.example.com",
+            mode="stream-one" if security == "reality" else "auto",
+        )
     params.update(changes)
     params = {k: v for k, v in params.items() if v is not None}
-    return "vless://" + CLIENT_ID + "@proxy.example.com:8443?" + urlencode(params, quote_via=quote)
+    return (
+        "vless://"
+        + CLIENT_ID
+        + "@proxy.example.com:8443?"
+        + urlencode(params, quote_via=quote)
+    )
 
 
 def upstream(network="tcp", security="reality", **changes):
@@ -46,10 +58,21 @@ def upstream(network="tcp", security="reality", **changes):
 
 def server_security(security="reality"):
     if security == "reality":
-        settings = {"server_name": "example.com", "target": "example.com:443",
-                    "private_key": PRIVATE_KEY, "short_ids": ["", "ab12"]}
+        settings = {
+            "server_name": "example.com",
+            "target": "example.com:443",
+            "private_key": PRIVATE_KEY,
+            "short_ids": ["", "ab12"],
+        }
     else:
-        settings = {"certificates": [{"certificateFile": "/etc/xray/cert.pem", "keyFile": "/etc/xray/key.pem"}]}
+        settings = {
+            "certificates": [
+                {
+                    "certificateFile": "/etc/xray/cert.pem",
+                    "keyFile": "/etc/xray/key.pem",
+                }
+            ]
+        }
     return {"type": security, "settings": settings}
 
 
@@ -65,44 +88,136 @@ def changed(original, path, value):
 class ParseTests(unittest.TestCase):
     def test_canonical_tcp_reality_shape_and_rendering(self):
         u = upstream(flow="xtls-rprx-vision")
-        self.assertEqual(u, {
-            "protocol": "vless", "auth": {"id": CLIENT_ID, "encryption": "none", "flow": "xtls-rprx-vision"},
-            "address": "proxy.example.com", "port": 8443,
-            "transport": {"type": "tcp", "settings": {}},
-            "security": {"type": "reality", "settings": {"server_name": "example.com", "public_key": PUBLIC_KEY,
-                         "short_id": "ab12", "fingerprint": "chrome", "spider_x": "/"}}, "enabled": True})
-        self.assertEqual(transports.render_outbound(u, "exit"), {
-            "tag": "exit", "protocol": "vless", "settings": {"vnext": [{"address": "proxy.example.com", "port": 8443,
-                "users": [{"id": CLIENT_ID, "encryption": "none", "flow": "xtls-rprx-vision"}]}]},
-            "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {
-                "serverName": "example.com", "publicKey": PUBLIC_KEY, "shortId": "ab12", "fingerprint": "chrome", "spiderX": "/"}}})
+        self.assertEqual(
+            u,
+            {
+                "protocol": "vless",
+                "auth": {
+                    "id": CLIENT_ID,
+                    "encryption": "none",
+                    "flow": "xtls-rprx-vision",
+                },
+                "address": "proxy.example.com",
+                "port": 8443,
+                "transport": {"type": "tcp", "settings": {}},
+                "security": {
+                    "type": "reality",
+                    "settings": {
+                        "server_name": "example.com",
+                        "public_key": PUBLIC_KEY,
+                        "short_id": "ab12",
+                        "fingerprint": "chrome",
+                        "spider_x": "/",
+                    },
+                },
+                "enabled": True,
+            },
+        )
+        self.assertEqual(
+            transports.render_outbound(u, "exit"),
+            {
+                "tag": "exit",
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [
+                        {
+                            "address": "proxy.example.com",
+                            "port": 8443,
+                            "users": [
+                                {
+                                    "id": CLIENT_ID,
+                                    "encryption": "none",
+                                    "flow": "xtls-rprx-vision",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                "streamSettings": {
+                    "network": "tcp",
+                    "security": "reality",
+                    "realitySettings": {
+                        "serverName": "example.com",
+                        "publicKey": PUBLIC_KEY,
+                        "shortId": "ab12",
+                        "fingerprint": "chrome",
+                        "spiderX": "/",
+                    },
+                },
+            },
+        )
 
     def test_xhttp_reality_shape_and_stream(self):
-        u = upstream("xhttp", "reality", path="/entry?token=a+b&n=1", host="cdn.example.com:443")
+        u = upstream(
+            "xhttp", "reality", path="/entry?token=a+b&n=1", host="cdn.example.com:443"
+        )
         self.assertEqual(u["auth"]["flow"], "")
         stream = transports.render_outbound(u, "exit")["streamSettings"]
         self.assertEqual(stream["network"], "xhttp")
-        self.assertEqual(stream["xhttpSettings"], {"path": "/entry?token=a+b&n=1", "host": "cdn.example.com:443", "mode": "stream-one"})
-        self.assertNotIn("flow", transports.render_outbound(u, "exit")["settings"]["vnext"][0]["users"][0])
+        self.assertEqual(
+            stream["xhttpSettings"],
+            {
+                "path": "/entry?token=a+b&n=1",
+                "host": "cdn.example.com:443",
+                "mode": "stream-one",
+            },
+        )
+        self.assertNotIn(
+            "flow",
+            transports.render_outbound(u, "exit")["settings"]["vnext"][0]["users"][0],
+        )
 
     def test_tls_all_modes_and_secure_defaults(self):
         for mode in ("auto", "packet-up", "stream-up", "stream-one"):
             with self.subTest(mode=mode):
                 u = upstream("xhttp", "tls", mode=mode)
-                self.assertEqual(u["security"]["settings"], {"server_name": "example.com", "alpn": ["h2", "http/1.1"], "allow_insecure": False})
+                self.assertEqual(
+                    u["security"]["settings"],
+                    {
+                        "server_name": "example.com",
+                        "alpn": ["h2", "http/1.1"],
+                        "allow_insecure": False,
+                    },
+                )
                 stream = transports.render_stream(u["transport"], u["security"])
-                self.assertEqual(stream["tlsSettings"], {"serverName": "example.com", "alpn": ["h2", "http/1.1"], "allowInsecure": False})
+                self.assertEqual(
+                    stream["tlsSettings"],
+                    {
+                        "serverName": "example.com",
+                        "alpn": ["h2", "http/1.1"],
+                        "allowInsecure": False,
+                    },
+                )
                 self.assertEqual(stream["xhttpSettings"]["mode"], mode)
 
     def test_minimal_inputs_and_defaults(self):
-        u = transports.parse_link("vless://" + CLIENT_ID + "@example.com?type=xhttp&security=tls")
+        u = transports.parse_link(
+            "vless://" + CLIENT_ID + "@example.com?type=xhttp&security=tls"
+        )
         self.assertEqual(u["port"], 443)
-        self.assertEqual(u["transport"]["settings"], {"path": "/", "host": "", "mode": "auto"})
+        self.assertEqual(
+            u["transport"]["settings"], {"path": "/", "host": "", "mode": "auto"}
+        )
         self.assertEqual(u["security"]["settings"]["server_name"], "example.com")
         minimal_tls = {"type": "tls", "settings": {"server_name": "example.com"}}
-        self.assertFalse(transports.render_stream({"type": "xhttp"}, minimal_tls)["tlsSettings"]["allowInsecure"])
-        u = upstream("xhttp", mode=None, host=None, path=None, fp=None, spx=None, flow=None, encryption=None)
-        self.assertEqual(u["transport"]["settings"], {"path": "/", "host": "", "mode": "stream-one"})
+        self.assertFalse(
+            transports.render_stream({"type": "xhttp"}, minimal_tls)["tlsSettings"][
+                "allowInsecure"
+            ]
+        )
+        u = upstream(
+            "xhttp",
+            mode=None,
+            host=None,
+            path=None,
+            fp=None,
+            spx=None,
+            flow=None,
+            encryption=None,
+        )
+        self.assertEqual(
+            u["transport"]["settings"], {"path": "/", "host": "", "mode": "stream-one"}
+        )
         self.assertEqual(u["security"]["settings"]["fingerprint"], "chrome")
 
     def test_empty_short_id_and_alias_are_preserved(self):
@@ -116,7 +231,11 @@ class ParseTests(unittest.TestCase):
                 self.assertEqual(transports.parse_link(transports.export_link(u)), u)
 
     def test_normalizes_uuid_dns_ip_and_fingerprint(self):
-        u = transports.parse_link(link(sid="ABCD", fp="Chrome").replace("proxy.example.com", "PROXY.example.com").replace(CLIENT_ID, CLIENT_ID.replace("-", "")))
+        u = transports.parse_link(
+            link(sid="ABCD", fp="Chrome")
+            .replace("proxy.example.com", "PROXY.example.com")
+            .replace(CLIENT_ID, CLIENT_ID.replace("-", ""))
+        )
         self.assertEqual(u["auth"]["id"], CLIENT_ID)
         self.assertEqual(u["address"], "proxy.example.com")
         self.assertEqual(u["security"]["settings"]["short_id"], "abcd")
@@ -126,19 +245,35 @@ class ParseTests(unittest.TestCase):
                 self.assertEqual(transports.parse_link(transports.export_link(u)), u)
 
     def test_roundtrips_ipv6_queries_percent_plus_and_unicode_label(self):
-        for network, security in (("tcp", "reality"), ("xhttp", "reality"), ("xhttp", "tls")):
+        for network, security in (
+            ("tcp", "reality"),
+            ("xhttp", "reality"),
+            ("xhttp", "tls"),
+        ):
             with self.subTest(network=network, security=security):
                 u = upstream(network, security)
                 u["address"] = "2001:db8::1"
                 if network == "xhttp":
-                    u["transport"]["settings"].update(path="/vpn/%61?token=a+b&literal=%2B", host="[2001:db8::2]:8443")
+                    u["transport"]["settings"].update(
+                        path="/vpn/%61?token=a+b&literal=%2B", host="[2001:db8::2]:8443"
+                    )
                 exported = transports.export_link(u, "Lisboa + 東京 #1")
                 self.assertIn("@[2001:db8::1]:8443?", exported)
-                self.assertTrue(exported.endswith("#Lisboa%20%2B%20%E6%9D%B1%E4%BA%AC%20%231"))
+                self.assertTrue(
+                    exported.endswith("#Lisboa%20%2B%20%E6%9D%B1%E4%BA%AC%20%231")
+                )
                 self.assertEqual(transports.parse_link(exported), u)
-                self.assertEqual(transports.export_link(transports.parse_link(exported), "Lisboa + 東京 #1"), exported)
+                self.assertEqual(
+                    transports.export_link(
+                        transports.parse_link(exported), "Lisboa + 東京 #1"
+                    ),
+                    exported,
+                )
                 if network == "xhttp":
-                    self.assertEqual(parse_qs(urlsplit(exported).query)["path"], [u["transport"]["settings"]["path"]])
+                    self.assertEqual(
+                        parse_qs(urlsplit(exported).query)["path"],
+                        [u["transport"]["settings"]["path"]],
+                    )
 
     def test_tls_explicit_alpn_and_verification_false(self):
         for alpn in ("h2", "http/1.1", "h3", "h2,http/1.1"):
@@ -146,37 +281,90 @@ class ParseTests(unittest.TestCase):
                 with self.subTest(alpn=alpn, insecure=insecure):
                     u = upstream("xhttp", "tls", alpn=alpn, allowInsecure=insecure)
                     self.assertEqual(u["security"]["settings"]["alpn"], alpn.split(","))
-                    self.assertEqual(transports.parse_link(transports.export_link(u)), u)
+                    self.assertEqual(
+                        transports.parse_link(transports.export_link(u)), u
+                    )
 
     def test_rejects_malformed_and_ambiguous_links(self):
         valid = link()
-        invalid = [None, {}, b"vless://", "", " " + valid, valid + "\n", valid.replace("vless://", "vmess://"),
-                   valid.replace(CLIENT_ID, "secret-invalid-id"), valid.replace(CLIENT_ID + "@", ""),
-                   valid.replace(CLIENT_ID + "@", CLIENT_ID + ":password@"), valid.replace("@proxy", "@@proxy"),
-                   valid.replace(":8443", ":0"), valid.replace(":8443", ":65536"), valid.replace(":8443", ":abc"),
-                   valid.replace(":8443", ":"), valid.replace("proxy.example.com", "[::1]junk"),
-                   valid.replace("proxy.example.com", "[v1.example]"), valid.replace("proxy.example.com", "2001:db8::1"),
-                   valid.replace("proxy.example.com", "example.com\\evil"), valid.replace("proxy.example.com", "bad%20host"),
-                   valid.replace(":8443?", ":8443/evil?"), valid + "&unknown=secret", valid + "&type=tcp", valid + "&%74ype=tcp",
-                   valid + "&shortid=ab12", valid + "&sid=", valid + "&broken", valid + "&fp=%ZZ", valid + "&fp=%FF",
-                   valid + "#%FF", valid + "&security=tls", valid + "&extra=%7B%7D"]
+        invalid = [
+            None,
+            {},
+            b"vless://",
+            "",
+            " " + valid,
+            valid + "\n",
+            valid.replace("vless://", "vmess://"),
+            valid.replace(CLIENT_ID, "secret-invalid-id"),
+            valid.replace(CLIENT_ID + "@", ""),
+            valid.replace(CLIENT_ID + "@", CLIENT_ID + ":password@"),
+            valid.replace("@proxy", "@@proxy"),
+            valid.replace(":8443", ":0"),
+            valid.replace(":8443", ":65536"),
+            valid.replace(":8443", ":abc"),
+            valid.replace(":8443", ":"),
+            valid.replace("proxy.example.com", "[::1]junk"),
+            valid.replace("proxy.example.com", "[v1.example]"),
+            valid.replace("proxy.example.com", "2001:db8::1"),
+            valid.replace("proxy.example.com", "example.com\\evil"),
+            valid.replace("proxy.example.com", "bad%20host"),
+            valid.replace(":8443?", ":8443/evil?"),
+            valid + "&unknown=secret",
+            valid + "&type=tcp",
+            valid + "&%74ype=tcp",
+            valid + "&shortid=ab12",
+            valid + "&sid=",
+            valid + "&broken",
+            valid + "&fp=%ZZ",
+            valid + "&fp=%FF",
+            valid + "#%FF",
+            valid + "&security=tls",
+            valid + "&extra=%7B%7D",
+        ]
         for value in invalid:
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     transports.parse_link(value)
 
     def test_rejects_unsupported_or_cross_security_parameters(self):
-        cases = [link(security="none"), link(security="tls"), link(network="ws"), link(encryption="aes-128-gcm"),
-                 link(headerType="http"), link(path="/"), link(host="example.com"), link(mode="stream-one"),
-                 link("xhttp", headerType="none"), link(alpn="h2"), link(allowInsecure="0"), link(sid=None),
-                 link(pbk=None), link(sni=None), link(fp="unsafe"), link(fp="hellogolang"), link(fp="unknown"),
-                 link("xhttp", flow="xtls-rprx-vision"), link("xhttp", "tls", flow="xtls-rprx-vision-udp443"),
-                 link("xhttp", "tls", pbk=PUBLIC_KEY), link("xhttp", "tls", sid="ab"),
-                 link("xhttp", "tls", fp="chrome"), link("xhttp", "tls", spx="/")]
-        cases += [link("xhttp", "reality", mode=m) for m in ("auto", "packet-up", "stream-up", "", "invalid")]
+        cases = [
+            link(security="none"),
+            link(security="tls"),
+            link(network="ws"),
+            link(encryption="aes-128-gcm"),
+            link(headerType="http"),
+            link(path="/"),
+            link(host="example.com"),
+            link(mode="stream-one"),
+            link("xhttp", headerType="none"),
+            link(alpn="h2"),
+            link(allowInsecure="0"),
+            link(sid=None),
+            link(pbk=None),
+            link(sni=None),
+            link(fp="unsafe"),
+            link(fp="hellogolang"),
+            link(fp="unknown"),
+            link("xhttp", flow="xtls-rprx-vision"),
+            link("xhttp", "tls", flow="xtls-rprx-vision-udp443"),
+            link("xhttp", "tls", pbk=PUBLIC_KEY),
+            link("xhttp", "tls", sid="ab"),
+            link("xhttp", "tls", fp="chrome"),
+            link("xhttp", "tls", spx="/"),
+        ]
+        cases += [
+            link("xhttp", "reality", mode=m)
+            for m in ("auto", "packet-up", "stream-up", "", "invalid")
+        ]
         cases += [link("xhttp", "tls", mode=m) for m in ("", "invalid", "STREAM-ONE")]
-        cases += [link("xhttp", "tls", allowInsecure=v) for v in ("1", "true", "False", "", "yes")]
-        cases += [link("xhttp", "tls", alpn=v) for v in ("", "h2,h2", "h2,", "h2,h3", "foo", "h2, http/1.1")]
+        cases += [
+            link("xhttp", "tls", allowInsecure=v)
+            for v in ("1", "true", "False", "", "yes")
+        ]
+        cases += [
+            link("xhttp", "tls", alpn=v)
+            for v in ("", "h2,h2", "h2,", "h2,h3", "foo", "h2, http/1.1")
+        ]
         for value in cases:
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
@@ -203,20 +391,56 @@ class ValidationTests(unittest.TestCase):
     def test_validate_and_render_reject_bad_shapes_and_types(self):
         u = upstream()
         mutations = [(("protocol",), v) for v in (None, [], "vmess")]
-        mutations += [(("port",), v) for v in (True, False, 0, 65536, -1, "443", 443.0, None)]
+        mutations += [
+            (("port",), v) for v in (True, False, 0, 65536, -1, "443", 443.0, None)
+        ]
         mutations += [(("enabled",), v) for v in (0, 1, "true", None)]
-        mutations += [(("auth",), v) for v in (None, [], {}, {"id": CLIENT_ID, "password": "secret"})]
+        mutations += [
+            (("auth",), v)
+            for v in (None, [], {}, {"id": CLIENT_ID, "password": "secret"})
+        ]
         mutations += [(("auth", "id"), v) for v in (None, [], 10, "", "invalid")]
-        mutations += [(("auth", "flow"), v) for v in (None, [], "vision", "xtls-rprx-direct")]
+        mutations += [
+            (("auth", "flow"), v) for v in (None, [], "vision", "xtls-rprx-direct")
+        ]
         mutations += [(("auth", "encryption"), "aes")]
-        mutations += [(("transport",), v) for v in (None, [], {}, {"type": "ws"}, {"type": "tcp", "settings": {"host": "example.com"}})]
+        mutations += [
+            (("transport",), v)
+            for v in (
+                None,
+                [],
+                {},
+                {"type": "ws"},
+                {"type": "tcp", "settings": {"host": "example.com"}},
+            )
+        ]
         mutations += [(("transport", "type"), v) for v in (None, [], {}, "grpc")]
-        mutations += [(("security",), v) for v in (None, [], {}, {"type": "tls", "settings": {"server_name": "example.com"}})]
+        mutations += [
+            (("security",), v)
+            for v in (
+                None,
+                [],
+                {},
+                {"type": "tls", "settings": {"server_name": "example.com"}},
+            )
+        ]
         mutations += [(("security", "type"), v) for v in (None, [], {}, "none")]
-        mutations += [(("security", "settings"), v) for v in (None, [], {}, {"server_name": "example.com", "private_key": PRIVATE_KEY})]
+        mutations += [
+            (("security", "settings"), v)
+            for v in (
+                None,
+                [],
+                {},
+                {"server_name": "example.com", "private_key": PRIVATE_KEY},
+            )
+        ]
         for path, value in mutations:
             bad = changed(u, path, value)
-            for api in (transports.validate_upstream, lambda x: transports.render_outbound(x, "exit"), transports.export_link):
+            for api in (
+                transports.validate_upstream,
+                lambda x: transports.render_outbound(x, "exit"),
+                transports.export_link,
+            ):
                 with self.subTest(path=path, value=value, api=api):
                     with self.assertRaises(ValueError):
                         api(bad)
@@ -234,10 +458,47 @@ class ValidationTests(unittest.TestCase):
                     transports.validate_upstream(bad)
 
     def test_strict_host_and_path_validation_on_both_entry_points(self):
-        bad_hosts = ["https://example.com", "foo/bar", "foo?bar", "foo#bar", "user@host", "bad host", "example.com\r\nX:a",
-                     "a..b", "-host", "host-", "host_foo", "999.0.0.1", "[::1]junk", "[v1.foo]", "host:", "host:0", "host:65536", "::1", "host:abc"]
-        bad_paths = ["", "relative", "https://example.com/x", "//host/path", "/x#fragment", "/a\\b", "/white space", "/\n", "/%0d%0a",
-                     "/bad%", "/bad%GG", "/%FF", "/a/../b", "/%2e%2e/b", "/a/./b", "/%5c", "/%23fragment", "/%2fhost"]
+        bad_hosts = [
+            "https://example.com",
+            "foo/bar",
+            "foo?bar",
+            "foo#bar",
+            "user@host",
+            "bad host",
+            "example.com\r\nX:a",
+            "a..b",
+            "-host",
+            "host-",
+            "host_foo",
+            "999.0.0.1",
+            "[::1]junk",
+            "[v1.foo]",
+            "host:",
+            "host:0",
+            "host:65536",
+            "::1",
+            "host:abc",
+        ]
+        bad_paths = [
+            "",
+            "relative",
+            "https://example.com/x",
+            "//host/path",
+            "/x#fragment",
+            "/a\\b",
+            "/white space",
+            "/\n",
+            "/%0d%0a",
+            "/bad%",
+            "/bad%GG",
+            "/%FF",
+            "/a/../b",
+            "/%2e%2e/b",
+            "/a/./b",
+            "/%5c",
+            "/%23fragment",
+            "/%2fhost",
+        ]
         for field, values in (("host", bad_hosts), ("path", bad_paths)):
             for value in values:
                 with self.subTest(field=field, value=value):
@@ -252,7 +513,15 @@ class ValidationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     upstream(spx=value)
         for field in ("address", "server_name"):
-            for value in ("", "host:443", "[::1]", "foo/bar", "bad host", None, "a" * 64 + ".com"):
+            for value in (
+                "",
+                "host:443",
+                "[::1]",
+                "foo/bar",
+                "bad host",
+                None,
+                "a" * 64 + ".com",
+            ):
                 with self.subTest(field=field, value=value):
                     bad = upstream()
                     if field == "address":
@@ -263,7 +532,16 @@ class ValidationTests(unittest.TestCase):
                         transports.validate_upstream(bad)
 
     def test_reality_keys_and_short_ids(self):
-        for value in ("bad-key", PUBLIC_KEY + "=", PUBLIC_KEY[:-1], "!" * 43, base64.urlsafe_b64encode(b"short").decode(), None, [], 123):
+        for value in (
+            "bad-key",
+            PUBLIC_KEY + "=",
+            PUBLIC_KEY[:-1],
+            "!" * 43,
+            base64.urlsafe_b64encode(b"short").decode(),
+            None,
+            [],
+            123,
+        ):
             with self.subTest(key=value):
                 bad = changed(upstream(), ("security", "settings", "public_key"), value)
                 with self.assertRaises(ValueError):
@@ -274,7 +552,9 @@ class ValidationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     transports.validate_upstream(bad)
         for value in ("", "00", "0123456789abcdef"):
-            self.assertEqual(upstream(sid=value)["security"]["settings"]["short_id"], value)
+            self.assertEqual(
+                upstream(sid=value)["security"]["settings"]["short_id"], value
+            )
 
     def test_tls_settings_require_actual_false_and_valid_alpn(self):
         u = upstream("xhttp", "tls")
@@ -303,16 +583,30 @@ class ValidationTests(unittest.TestCase):
         del u["security"]["settings"]["alpn"]
         del u["security"]["settings"]["allow_insecure"]
         self.assertIsNone(transports.validate_upstream(u))
-        self.assertFalse(transports.render_outbound(u, "exit")["streamSettings"]["tlsSettings"]["allowInsecure"])
+        self.assertFalse(
+            transports.render_outbound(u, "exit")["streamSettings"]["tlsSettings"][
+                "allowInsecure"
+            ]
+        )
 
     def test_safe_errors_contain_no_input_secrets(self):
         secret = "SECRET-uuid-key-link-label"
-        bad_inputs = [lambda: transports.parse_link("vless://" + secret + ":password@example.com?security=tls"),
-                      lambda: transports.parse_link(link(pbk=secret)),
-                      lambda: transports.validate_upstream(changed(upstream(), ("auth", "id"), secret)),
-                      lambda: transports.validate_upstream(changed(upstream(), ("security", "settings", "public_key"), secret)),
-                      lambda: transports.validate_upstream(dict(upstream(), **{secret: secret})),
-                      lambda: transports.render_stream({"type": "xhttp", "settings": {secret: secret}}, server_security(), True)]
+        bad_inputs = [
+            lambda: transports.parse_link(
+                "vless://" + secret + ":password@example.com?security=tls"
+            ),
+            lambda: transports.parse_link(link(pbk=secret)),
+            lambda: transports.validate_upstream(
+                changed(upstream(), ("auth", "id"), secret)
+            ),
+            lambda: transports.validate_upstream(
+                changed(upstream(), ("security", "settings", "public_key"), secret)
+            ),
+            lambda: transports.validate_upstream(dict(upstream(), **{secret: secret})),
+            lambda: transports.render_stream(
+                {"type": "xhttp", "settings": {secret: secret}}, server_security(), True
+            ),
+        ]
         for call in bad_inputs:
             with self.subTest(call=call):
                 with self.assertRaises(ValueError) as caught:
@@ -334,9 +628,18 @@ class ECHTests(unittest.TestCase):
                 self.assertEqual(settings["ech_config_list"], ECH_CONFIG)
                 self.assertEqual(settings["ech_force_query"], "full")
                 self.assertIs(settings["allow_insecure"], False)
-                native = transports.render_outbound(u, "exit")["streamSettings"]["tlsSettings"]
-                self.assertEqual(native, {"serverName": "example.com", "alpn": ["h2", "http/1.1"],
-                    "allowInsecure": False, "echConfigList": ECH_CONFIG})
+                native = transports.render_outbound(u, "exit")["streamSettings"][
+                    "tlsSettings"
+                ]
+                self.assertEqual(
+                    native,
+                    {
+                        "serverName": "example.com",
+                        "alpn": ["h2", "http/1.1"],
+                        "allowInsecure": False,
+                        "echConfigList": ECH_CONFIG,
+                    },
+                )
                 exported = transports.export_link(u)
                 self.assertIn("ech=%2B%2F8%3D", exported)
                 self.assertNotIn("ech_force_query", exported)
@@ -344,13 +647,19 @@ class ECHTests(unittest.TestCase):
                 self.assertEqual(transports.parse_link(exported), u)
 
     def test_https_discovery_roundtrips_without_network(self):
-        for value in ("https://1.1.1.1/dns-query", "https://dns.example.com:8443/dns-query?token=a%2Bb&v=1",
-                      "lookup.example+https://1.1.1.1/dns-query", "lookup.example+https://[2001:db8::1]:443/dns-query"):
+        for value in (
+            "https://1.1.1.1/dns-query",
+            "https://dns.example.com:8443/dns-query?token=a%2Bb&v=1",
+            "lookup.example+https://1.1.1.1/dns-query",
+            "lookup.example+https://[2001:db8::1]:443/dns-query",
+        ):
             with self.subTest(value=value):
                 u = upstream("xhttp", "tls", ech=value)
                 original = copy.deepcopy(u)
                 self.assertIsNone(transports.validate_upstream(u))
-                native = transports.render_stream(u["transport"], u["security"])["tlsSettings"]
+                native = transports.render_stream(u["transport"], u["security"])[
+                    "tlsSettings"
+                ]
                 self.assertEqual(native["echConfigList"], value)
                 self.assertNotIn("echForceQuery", native)
                 exported = transports.export_link(u)
@@ -362,15 +671,26 @@ class ECHTests(unittest.TestCase):
         expected = upstream("xhttp", "tls")
         self.assertEqual(upstream("xhttp", "tls", ech=""), expected)
         u = changed(expected, ("security", "settings", "ech_config_list"), "")
-        self.assertEqual(transports.render_outbound(u, "exit"), transports.render_outbound(expected, "exit"))
+        self.assertEqual(
+            transports.render_outbound(u, "exit"),
+            transports.render_outbound(expected, "exit"),
+        )
         self.assertNotIn("ech=", transports.export_link(u))
         self.assertEqual(transports.parse_link(transports.export_link(u)), expected)
-        self.assertNotIn("echConfigList", transports.render_outbound(expected, "exit")["streamSettings"]["tlsSettings"])
+        self.assertNotIn(
+            "echConfigList",
+            transports.render_outbound(expected, "exit")["streamSettings"][
+                "tlsSettings"
+            ],
+        )
 
     def test_force_query_defaults_to_full_and_rejects_weaker_or_orphan_policy(self):
         u = upstream("xhttp", "tls", ech=ECH_CONFIG)
         del u["security"]["settings"]["ech_force_query"]
-        self.assertNotIn("echForceQuery", transports.render_outbound(u, "exit")["streamSettings"]["tlsSettings"])
+        self.assertNotIn(
+            "echForceQuery",
+            transports.render_outbound(u, "exit")["streamSettings"]["tlsSettings"],
+        )
         for value in ("", "none", "half", "FULL", None, True, [], {}):
             with self.subTest(policy=value):
                 bad = changed(u, ("security", "settings", "ech_force_query"), value)
@@ -389,21 +709,55 @@ class ECHTests(unittest.TestCase):
                 transports.validate_upstream(bad)
 
     def test_rejects_invalid_base64_and_discovery(self):
-        invalid = [None, [], {}, True, 123, " ", "+/8", "+/8==", "-_8=", "+/9=", "=", "!!!!", "éééé",
-                   "http://dns.example/dns-query", "udp://1.1.1.1", "h2c://dns.example/dns-query",
-                   "https://", "https:///dns-query", "https://user:password@dns.example/dns-query",
-                   "https://dns.example:0/dns-query", "https://dns.example:65536/dns-query", "https://dns.example:/dns-query",
-                   "https://[::1]junk/dns-query", "https://dns.example/dns-query#frag", "https://dns.example/dns-query#",
-                   "https://dns.example/a/../dns-query", "https://dns.example/%0d%0a", "https://dns.example/%GG",
-                   "https://dns.example/dns-query?token=%FF", "https://dns.example/dns-query?token=%0a",
-                   "https://dns.example/dns-query?token=a+b", "https://dns.example\\evil/dns-query",
-                   "https://dns.example/white space", "https://dns.example/dns-query\n",
-                   "+https://1.1.1.1/dns-query", "127.0.0.1+https://1.1.1.1/dns-query",
-                   "lookup.example:443+https://1.1.1.1/dns-query", "a+b+https://1.1.1.1/dns-query",
-                   "lookup.example+http://1.1.1.1/dns-query", "lookup.example+https://1.1.1.1/dns-query?x=a+b"]
+        invalid = [
+            None,
+            [],
+            {},
+            True,
+            123,
+            " ",
+            "+/8",
+            "+/8==",
+            "-_8=",
+            "+/9=",
+            "=",
+            "!!!!",
+            "éééé",
+            "http://dns.example/dns-query",
+            "udp://1.1.1.1",
+            "h2c://dns.example/dns-query",
+            "https://",
+            "https:///dns-query",
+            "https://user:password@dns.example/dns-query",
+            "https://dns.example:0/dns-query",
+            "https://dns.example:65536/dns-query",
+            "https://dns.example:/dns-query",
+            "https://[::1]junk/dns-query",
+            "https://dns.example/dns-query#frag",
+            "https://dns.example/dns-query#",
+            "https://dns.example/a/../dns-query",
+            "https://dns.example/%0d%0a",
+            "https://dns.example/%GG",
+            "https://dns.example/dns-query?token=%FF",
+            "https://dns.example/dns-query?token=%0a",
+            "https://dns.example/dns-query?token=a+b",
+            "https://dns.example\\evil/dns-query",
+            "https://dns.example/white space",
+            "https://dns.example/dns-query\n",
+            "+https://1.1.1.1/dns-query",
+            "127.0.0.1+https://1.1.1.1/dns-query",
+            "lookup.example:443+https://1.1.1.1/dns-query",
+            "a+b+https://1.1.1.1/dns-query",
+            "lookup.example+http://1.1.1.1/dns-query",
+            "lookup.example+https://1.1.1.1/dns-query?x=a+b",
+        ]
         for value in invalid:
             with self.subTest(value=value):
-                bad = changed(upstream("xhttp", "tls"), ("security", "settings", "ech_config_list"), value)
+                bad = changed(
+                    upstream("xhttp", "tls"),
+                    ("security", "settings", "ech_config_list"),
+                    value,
+                )
                 with self.assertRaises(ValueError):
                     transports.validate_upstream(bad)
                 if isinstance(value, str):
@@ -414,7 +768,9 @@ class ECHTests(unittest.TestCase):
         security = server_security("tls")
         security["settings"]["ech_server_keys"] = ECH_CONFIG
         original = copy.deepcopy(security)
-        native = transports.render_stream({"type": "xhttp"}, security, server=True)["tlsSettings"]
+        native = transports.render_stream({"type": "xhttp"}, security, server=True)[
+            "tlsSettings"
+        ]
         self.assertEqual(native["echServerKeys"], ECH_CONFIG)
         self.assertNotIn("echConfigList", native)
         self.assertNotIn("echForceQuery", native)
@@ -429,7 +785,13 @@ class ECHTests(unittest.TestCase):
     def test_reality_and_wrong_side_and_sockopt_are_rejected(self):
         for server in (False, True):
             security = server_security() if server else upstream("xhttp")["security"]
-            for field in ("ech_config_list", "ech_force_query", "ech_server_keys", "ech_sockopt", "echSockopt"):
+            for field in (
+                "ech_config_list",
+                "ech_force_query",
+                "ech_server_keys",
+                "ech_sockopt",
+                "echSockopt",
+            ):
                 bad = copy.deepcopy(security)
                 bad["settings"][field] = ECH_CONFIG
                 with self.subTest(server=server, field=field):
@@ -439,28 +801,52 @@ class ECHTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 upstream("xhttp", "reality", ech=value)
         for field in ("ech_server_keys", "ech_sockopt", "echSockopt", "echConfigList"):
-            bad = changed(upstream("xhttp", "tls"), ("security", "settings", field), ECH_CONFIG)
+            bad = changed(
+                upstream("xhttp", "tls"), ("security", "settings", field), ECH_CONFIG
+            )
             with self.assertRaises(ValueError):
                 transports.validate_upstream(bad)
-        for field in ("ech_config_list", "ech_force_query", "ech_sockopt", "echSockopt"):
+        for field in (
+            "ech_config_list",
+            "ech_force_query",
+            "ech_sockopt",
+            "echSockopt",
+        ):
             bad = server_security("tls")
             bad["settings"][field] = ECH_CONFIG
             with self.assertRaises(ValueError):
                 transports.render_stream({"type": "xhttp"}, bad, True)
 
     def test_duplicate_and_unstandardized_uri_parameters_are_rejected(self):
-        for suffix in ("&ech=", "&ech=" + quote(ECH_CONFIG, safe=""), "&echForceQuery=full",
-                       "&ech_force_query=full", "&echServerKeys=secret", "&echSockopt=%7B%7D", "&echConfigList=secret"):
+        for suffix in (
+            "&ech=",
+            "&ech=" + quote(ECH_CONFIG, safe=""),
+            "&echForceQuery=full",
+            "&ech_force_query=full",
+            "&echServerKeys=secret",
+            "&echSockopt=%7B%7D",
+            "&echConfigList=secret",
+        ):
             with self.subTest(suffix=suffix):
                 with self.assertRaises(ValueError):
                     transports.parse_link(link("xhttp", "tls", ech=ECH_CONFIG) + suffix)
         with self.assertRaises(ValueError):
-            transports.parse_link(link("xhttp", "tls", ech=ECH_CONFIG).replace("%2B", "+"))
+            transports.parse_link(
+                link("xhttp", "tls", ech=ECH_CONFIG).replace("%2B", "+")
+            )
 
     def test_errors_do_not_expose_ech_material_or_discovery_credentials(self):
-        for value in ("SECRET-ECH-KEY", "https://secret:password@dns.example/dns-query", "secret.example+https://"):
+        for value in (
+            "SECRET-ECH-KEY",
+            "https://secret:password@dns.example/dns-query",
+            "secret.example+https://",
+        ):
             with self.subTest(value=value):
-                bad = changed(upstream("xhttp", "tls"), ("security", "settings", "ech_config_list"), value)
+                bad = changed(
+                    upstream("xhttp", "tls"),
+                    ("security", "settings", "ech_config_list"),
+                    value,
+                )
                 with self.assertRaises(ValueError) as caught:
                     transports.validate_upstream(bad)
                 self.assertNotIn(value, str(caught.exception))
@@ -476,17 +862,46 @@ class ServerTests(unittest.TestCase):
     def test_reality_inbound_native_shape(self):
         for network in ("tcp", "xhttp"):
             with self.subTest(network=network):
-                result = transports.render_stream({"type": network}, server_security(), server=True)
-                self.assertEqual(result["realitySettings"], {"target": "example.com:443", "serverNames": ["example.com"],
-                                 "privateKey": PRIVATE_KEY, "shortIds": ["", "ab12"]})
+                result = transports.render_stream(
+                    {"type": network}, server_security(), server=True
+                )
+                self.assertEqual(
+                    result["realitySettings"],
+                    {
+                        "target": "example.com:443",
+                        "serverNames": ["example.com"],
+                        "privateKey": PRIVATE_KEY,
+                        "shortIds": ["", "ab12"],
+                    },
+                )
                 if network == "xhttp":
-                    self.assertEqual(result["xhttpSettings"], {"path": "/", "host": "", "mode": "stream-one"})
+                    self.assertEqual(
+                        result["xhttpSettings"],
+                        {"path": "/", "host": "", "mode": "stream-one"},
+                    )
                 self.assertNotIn("publicKey", result["realitySettings"])
 
     def test_tls_inbound_native_certificates(self):
-        result = transports.render_stream({"type": "xhttp"}, server_security("tls"), server=True)
-        self.assertEqual(result, {"network": "xhttp", "security": "tls", "xhttpSettings": {"path": "/", "host": "", "mode": "auto"},
-            "tlsSettings": {"alpn": ["h2", "http/1.1"], "certificates": [{"certificateFile": "/etc/xray/cert.pem", "keyFile": "/etc/xray/key.pem"}]}})
+        result = transports.render_stream(
+            {"type": "xhttp"}, server_security("tls"), server=True
+        )
+        self.assertEqual(
+            result,
+            {
+                "network": "xhttp",
+                "security": "tls",
+                "xhttpSettings": {"path": "/", "host": "", "mode": "auto"},
+                "tlsSettings": {
+                    "alpn": ["h2", "http/1.1"],
+                    "certificates": [
+                        {
+                            "certificateFile": "/etc/xray/cert.pem",
+                            "keyFile": "/etc/xray/key.pem",
+                        }
+                    ],
+                },
+            },
+        )
         security = server_security("tls")
         security["settings"].update(server_name="example.com", alpn=["h3"])
         result = transports.render_stream({"type": "xhttp"}, security, True)
@@ -494,9 +909,22 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(result["tlsSettings"]["alpn"], ["h3"])
 
     def test_reality_server_validation_and_no_client_field_leaks(self):
-        cases = [(("target",), v) for v in (None, "example.com", "https://example.com:443", "example.com:0", "/unix.sock", "[::1]junk:443")]
+        cases = [
+            (("target",), v)
+            for v in (
+                None,
+                "example.com",
+                "https://example.com:443",
+                "example.com:0",
+                "/unix.sock",
+                "[::1]junk:443",
+            )
+        ]
         cases += [(("private_key",), v) for v in ("", "secret-key", None)]
-        cases += [(("short_ids",), v) for v in ([], "ab", ["a"], [None], ["ab", "AB"], ["ab" * 9])]
+        cases += [
+            (("short_ids",), v)
+            for v in ([], "ab", ["a"], [None], ["ab", "AB"], ["ab" * 9])
+        ]
         cases += [(("server_name",), v) for v in ("", "example.com:443", "bad host")]
         for path, value in cases:
             security = copy.deepcopy(server_security())
@@ -512,17 +940,39 @@ class ServerTests(unittest.TestCase):
                     transports.render_stream({"type": "tcp"}, security, True)
         for mode in ("auto", "packet-up", "stream-up", "bad"):
             with self.assertRaises(ValueError):
-                transports.render_stream({"type": "xhttp", "settings": {"mode": mode}}, server_security(), True)
+                transports.render_stream(
+                    {"type": "xhttp", "settings": {"mode": mode}},
+                    server_security(),
+                    True,
+                )
         security = server_security()
         security["settings"]["target"] = "[2001:db8::1]:443"
-        self.assertEqual(transports.render_stream({"type": "tcp"}, security, True)["realitySettings"]["target"], "[2001:db8::1]:443")
+        self.assertEqual(
+            transports.render_stream({"type": "tcp"}, security, True)[
+                "realitySettings"
+            ]["target"],
+            "[2001:db8::1]:443",
+        )
 
     def test_tls_server_rejects_invalid_certificates_and_client_fields(self):
-        for certs in (None, [], {}, [None], [{}], [{"certificateFile": "cert"}], [{"certificateFile": "cert", "keyFile": ""}],
-                      [{"certificateFile": "cert\nsecret", "keyFile": "key"}], [{"certificateFile": "cert", "keyFile": "key", "usage": "verify"}]):
+        for certs in (
+            None,
+            [],
+            {},
+            [None],
+            [{}],
+            [{"certificateFile": "cert"}],
+            [{"certificateFile": "cert", "keyFile": ""}],
+            [{"certificateFile": "cert\nsecret", "keyFile": "key"}],
+            [{"certificateFile": "cert", "keyFile": "key", "usage": "verify"}],
+        ):
             with self.subTest(certs=certs):
                 with self.assertRaises(ValueError):
-                    transports.render_stream({"type": "xhttp"}, {"type": "tls", "settings": {"certificates": certs}}, True)
+                    transports.render_stream(
+                        {"type": "xhttp"},
+                        {"type": "tls", "settings": {"certificates": certs}},
+                        True,
+                    )
         for field in ("allow_insecure", "private_key", "public_key"):
             security = server_security("tls")
             security["settings"][field] = False
@@ -537,8 +987,11 @@ class ServerTests(unittest.TestCase):
             transports.render_stream({"type": "tcp"}, server_security(), server="yes")
 
 
-@unittest.skipUnless(os.environ.get("XRAY_BINARY") or os.environ.get("XRAY_TRANSPORT_INTEGRATION") == "1",
-                     "set XRAY_BINARY or XRAY_TRANSPORT_INTEGRATION=1 for pinned native validation")
+@unittest.skipUnless(
+    os.environ.get("XRAY_BINARY")
+    or os.environ.get("XRAY_TRANSPORT_INTEGRATION") == "1",
+    "set XRAY_BINARY or XRAY_TRANSPORT_INTEGRATION=1 for pinned native validation",
+)
 class NativeTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix="vpn-transports-native-")
@@ -546,25 +999,57 @@ class NativeTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         binary = os.environ.get("XRAY_BINARY")
         self.runtime_root = str(self.root) if binary else "/work"
-        self.command = [binary] if binary else ["docker", "run", "--rm", "-i", "--network", "none", "--entrypoint", "xray",
-            "-v", str(self.root) + ":/work:ro", os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.10.31")]
+        self.command = (
+            [binary]
+            if binary
+            else [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--network",
+                "none",
+                "--entrypoint",
+                "xray",
+                "-v",
+                str(self.root) + ":/work:ro",
+                os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.10.31"),
+            ]
+        )
         version = self.native("version")
         self.assertRegex(version, r"\AXray 26\.10\.31 \(")
 
     def native(self, *args, config=None):
-        result = subprocess.run(self.command + list(args), input=json.dumps(config) if config is not None else None,
-                                text=True, capture_output=True, timeout=30, check=False)
+        result = subprocess.run(
+            self.command + list(args),
+            input=json.dumps(config) if config is not None else None,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
 
     def validate(self, config):
-        self.assertIn("Configuration OK.", self.native("run", "-test", "-config", "stdin:", config=config))
+        self.assertIn(
+            "Configuration OK.",
+            self.native("run", "-test", "-config", "stdin:", config=config),
+        )
 
     def test_native_all_supported_outbound_combinations(self):
-        outbounds = [transports.render_outbound(upstream(flow="xtls-rprx-vision"), "tcp-reality"),
-                     transports.render_outbound(upstream("xhttp", "reality"), "xhttp-reality")]
-        outbounds += [transports.render_outbound(upstream("xhttp", "tls", mode=mode), "tls-" + mode)
-                      for mode in ("auto", "packet-up", "stream-up", "stream-one")]
+        outbounds = [
+            transports.render_outbound(
+                upstream(flow="xtls-rprx-vision"), "tcp-reality"
+            ),
+            transports.render_outbound(upstream("xhttp", "reality"), "xhttp-reality"),
+        ]
+        outbounds += [
+            transports.render_outbound(
+                upstream("xhttp", "tls", mode=mode), "tls-" + mode
+            )
+            for mode in ("auto", "packet-up", "stream-up", "stream-one")
+        ]
         self.validate({"outbounds": outbounds})
 
     def test_native_all_supported_inbound_combinations(self):
@@ -572,13 +1057,40 @@ class NativeTests(unittest.TestCase):
         for field, name in (("certificate", "cert.pem"), ("key", "key.pem")):
             (self.root / name).write_text("\n".join(certificate[field]) + "\n")
         security = server_security("tls")
-        security["settings"]["certificates"] = [{"certificateFile": self.runtime_root + "/cert.pem", "keyFile": self.runtime_root + "/key.pem"}]
-        streams = [transports.render_stream({"type": network}, server_security(), True) for network in ("tcp", "xhttp")]
-        streams += [transports.render_stream({"type": "xhttp", "settings": {"mode": mode}}, security, True)
-                    for mode in ("auto", "packet-up", "stream-up", "stream-one")]
-        self.validate({"inbounds": [{"listen": "127.0.0.1", "port": 20000 + index, "protocol": "vless",
-            "settings": {"clients": [{"id": CLIENT_ID}], "decryption": "none"}, "streamSettings": stream}
-            for index, stream in enumerate(streams)], "outbounds": [{"protocol": "freedom"}]})
+        security["settings"]["certificates"] = [
+            {
+                "certificateFile": self.runtime_root + "/cert.pem",
+                "keyFile": self.runtime_root + "/key.pem",
+            }
+        ]
+        streams = [
+            transports.render_stream({"type": network}, server_security(), True)
+            for network in ("tcp", "xhttp")
+        ]
+        streams += [
+            transports.render_stream(
+                {"type": "xhttp", "settings": {"mode": mode}}, security, True
+            )
+            for mode in ("auto", "packet-up", "stream-up", "stream-one")
+        ]
+        self.validate(
+            {
+                "inbounds": [
+                    {
+                        "listen": "127.0.0.1",
+                        "port": 20000 + index,
+                        "protocol": "vless",
+                        "settings": {
+                            "clients": [{"id": CLIENT_ID}],
+                            "decryption": "none",
+                        },
+                        "streamSettings": stream,
+                    }
+                    for index, stream in enumerate(streams)
+                ],
+                "outbounds": [{"protocol": "freedom"}],
+            }
+        )
 
     def test_native_reality_mode_parser_is_broader_than_pr2_policy(self):
         outbound = transports.render_outbound(upstream("xhttp", "reality"), "exit")
@@ -588,7 +1100,9 @@ class NativeTests(unittest.TestCase):
                 self.validate({"outbounds": [outbound]})
 
     def test_native_generated_ech_client_server_and_https_discovery(self):
-        material = self.native("tls", "ech", "-serverName", "outer.example").splitlines()
+        material = self.native(
+            "tls", "ech", "-serverName", "outer.example"
+        ).splitlines()
         config = material[material.index("ECH config list: ") + 1]
         keys = material[material.index("ECH server keys: ") + 1]
         self.assertTrue(config)
@@ -597,15 +1111,51 @@ class NativeTests(unittest.TestCase):
         for field, name in (("certificate", "cert.pem"), ("key", "key.pem")):
             (self.root / name).write_text("\n".join(certificate[field]) + "\n")
         security = server_security("tls")
-        security["settings"].update(ech_server_keys=keys, certificates=[{
-            "certificateFile": self.runtime_root + "/cert.pem", "keyFile": self.runtime_root + "/key.pem"}])
-        streams = [transports.render_stream({"type": "xhttp", "settings": {"mode": mode}}, security, True)
-                   for mode in ("auto", "packet-up", "stream-up", "stream-one")]
-        outbounds = [transports.render_outbound(upstream("xhttp", "tls", ech=value), "ech-" + str(index))
-                     for index, value in enumerate((config, "https://1.1.1.1/dns-query", "lookup.example+https://1.1.1.1/dns-query"))]
-        self.validate({"inbounds": [{"listen": "127.0.0.1", "port": 21000 + index, "protocol": "vless",
-            "settings": {"clients": [{"id": CLIENT_ID}], "decryption": "none"}, "streamSettings": stream}
-            for index, stream in enumerate(streams)], "outbounds": outbounds})
+        security["settings"].update(
+            ech_server_keys=keys,
+            certificates=[
+                {
+                    "certificateFile": self.runtime_root + "/cert.pem",
+                    "keyFile": self.runtime_root + "/key.pem",
+                }
+            ],
+        )
+        streams = [
+            transports.render_stream(
+                {"type": "xhttp", "settings": {"mode": mode}}, security, True
+            )
+            for mode in ("auto", "packet-up", "stream-up", "stream-one")
+        ]
+        outbounds = [
+            transports.render_outbound(
+                upstream("xhttp", "tls", ech=value), "ech-" + str(index)
+            )
+            for index, value in enumerate(
+                (
+                    config,
+                    "https://1.1.1.1/dns-query",
+                    "lookup.example+https://1.1.1.1/dns-query",
+                )
+            )
+        ]
+        self.validate(
+            {
+                "inbounds": [
+                    {
+                        "listen": "127.0.0.1",
+                        "port": 21000 + index,
+                        "protocol": "vless",
+                        "settings": {
+                            "clients": [{"id": CLIENT_ID}],
+                            "decryption": "none",
+                        },
+                        "streamSettings": stream,
+                    }
+                    for index, stream in enumerate(streams)
+                ],
+                "outbounds": outbounds,
+            }
+        )
         parsed = upstream("xhttp", "tls", ech=config)
         self.assertEqual(transports.parse_link(transports.export_link(parsed)), parsed)
 

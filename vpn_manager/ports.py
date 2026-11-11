@@ -1,0 +1,46 @@
+"""Narrow boundaries used by application workflows."""
+
+from pathlib import Path
+from typing import Any, Protocol
+
+Json = dict[str, Any]
+
+
+class StateStore(Protocol):
+    def load(self, path: Path) -> Json: ...
+
+    def save(self, path: Path, state: Json) -> None: ...
+
+
+class Statistics(Protocol):
+    def epoch(self, compose: Path) -> str: ...
+
+    def read(self, compose: Path, state: Json) -> Json: ...
+
+
+class Calendar(Protocol):
+    def period(self) -> str: ...
+
+    def timestamp(self) -> str: ...
+
+
+class UsageReader(Protocol):
+    def sample(self, state: Json, compose: Path) -> None: ...
+
+
+class RuntimeControl(Protocol):
+    def check_mount(self, compose: Path, config: Path) -> None: ...
+
+    def validate(self, compose: Path, candidate: Path) -> None: ...
+
+    def running(self, compose: Path) -> bool: ...
+
+    def restart(self, compose: Path, state: Json | None = None) -> None: ...
+
+    def verify(self, compose: Path, config: Json) -> None: ...
+
+    def stop(self, compose: Path) -> None: ...
+
+
+class PathProbe(Protocol):
+    def __call__(self, upstream: Json, settings: Json) -> Json: ...

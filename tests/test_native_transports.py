@@ -11,10 +11,10 @@ import datetime
 import importlib
 import json
 import os
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 
 @unittest.skipUnless(
@@ -38,13 +38,27 @@ class NativeTransportTests(unittest.TestCase):
         cls.root = Path(temporary.name).resolve()
 
         reality_key = x25519.X25519PrivateKey.generate()
-        cls.private_key = base64.urlsafe_b64encode(reality_key.private_bytes(
-            serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
-            serialization.NoEncryption(),
-        )).decode("ascii").rstrip("=")
-        cls.public_key = base64.urlsafe_b64encode(reality_key.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw,
-        )).decode("ascii").rstrip("=")
+        cls.private_key = (
+            base64.urlsafe_b64encode(
+                reality_key.private_bytes(
+                    serialization.Encoding.Raw,
+                    serialization.PrivateFormat.Raw,
+                    serialization.NoEncryption(),
+                )
+            )
+            .decode("ascii")
+            .rstrip("=")
+        )
+        cls.public_key = (
+            base64.urlsafe_b64encode(
+                reality_key.public_key().public_bytes(
+                    serialization.Encoding.Raw,
+                    serialization.PublicFormat.Raw,
+                )
+            )
+            .decode("ascii")
+            .rstrip("=")
+        )
 
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "vpn.example.test")])
@@ -57,16 +71,26 @@ class NativeTransportTests(unittest.TestCase):
             .serial_number(x509.random_serial_number())
             .not_valid_before(now - datetime.timedelta(minutes=1))
             .not_valid_after(now + datetime.timedelta(days=1))
-            .add_extension(x509.SubjectAlternativeName([
-                x509.DNSName("vpn.example.test"),
-            ]), critical=False)
+            .add_extension(
+                x509.SubjectAlternativeName(
+                    [
+                        x509.DNSName("vpn.example.test"),
+                    ]
+                ),
+                critical=False,
+            )
             .sign(key, hashes.SHA256())
         )
-        (cls.root / "certificate.pem").write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-        (cls.root / "key.pem").write_bytes(key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        ))
+        (cls.root / "certificate.pem").write_bytes(
+            certificate.public_bytes(serialization.Encoding.PEM)
+        )
+        (cls.root / "key.pem").write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
 
     def endpoint(self, transport, security, mode="auto", address="vpn.example.test"):
         transport_settings = {}
@@ -78,7 +102,9 @@ class NativeTransportTests(unittest.TestCase):
             }
         security_settings = {"server_name": "vpn.example.test"}
         if security == "reality":
-            security_settings.update({"public_key": self.public_key, "short_id": "a1b2c3d4"})
+            security_settings.update(
+                {"public_key": self.public_key, "short_id": "a1b2c3d4"}
+            )
         return {
             "protocol": "vless",
             "address": address,
@@ -97,17 +123,35 @@ class NativeTransportTests(unittest.TestCase):
         path = self.root / f"{label}.json"
         path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         result = subprocess.run(
-            ["docker", "run", "--rm", "--entrypoint", "xray",
-             "-v", f"{self.root}:/work:ro", self.image,
-             "run", "-test", "-config", f"/work/{path.name}"],
-            capture_output=True, text=True, timeout=120, check=False,
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--entrypoint",
+                "xray",
+                "-v",
+                f"{self.root}:/work:ro",
+                self.image,
+                "run",
+                "-test",
+                "-config",
+                f"/work/{path.name}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
         )
         self.assertEqual(
-            result.returncode, 0,
+            result.returncode,
+            0,
             f"{label} rejected by {self.image}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
         )
-        self.assertIn("Xray " + self.transports.PINNED_XRAY_VERSION, result.stdout + result.stderr,
-                      "XRAY_TEST_IMAGE must provide the requested Xray version")
+        self.assertIn(
+            "Xray " + self.transports.PINNED_XRAY_VERSION,
+            result.stdout + result.stderr,
+            "XRAY_TEST_IMAGE must provide the requested Xray version",
+        )
         self.assertIn("Configuration OK", result.stdout + result.stderr)
 
     def assert_roundtrip(self, endpoint):
@@ -123,7 +167,9 @@ class NativeTransportTests(unittest.TestCase):
             actual = parsed[section].get("settings", parsed[section])
             for key, value in expected.items():
                 self.assertEqual(actual[key], value, f"{section}.{key}")
-        reparsed = self.transports.parse_link(self.transports.export_link(parsed, label))
+        reparsed = self.transports.parse_link(
+            self.transports.export_link(parsed, label)
+        )
         self.assertEqual(reparsed, parsed)
         return parsed
 
@@ -131,23 +177,40 @@ class NativeTransportTests(unittest.TestCase):
         modes = self.modes(transport, security)
         for mode in modes:
             for address in ("vpn.example.test", "2001:db8::1"):
-                with self.subTest(transport=transport, security=security, mode=mode, address=address):
-                    endpoint = self.assert_roundtrip(self.endpoint(transport, security, mode, address))
+                with self.subTest(
+                    transport=transport, security=security, mode=mode, address=address
+                ):
+                    endpoint = self.assert_roundtrip(
+                        self.endpoint(transport, security, mode, address)
+                    )
                     outbound = self.transports.render_outbound(endpoint, "upstream")
                     self.assertEqual(outbound["streamSettings"]["network"], transport)
                     self.assertEqual(outbound["streamSettings"]["security"], security)
                     if transport == "xhttp":
-                        self.assertEqual(outbound["streamSettings"]["xhttpSettings"],
-                                         endpoint["transport"]["settings"])
-                    self.assertEqual(outbound["settings"]["vnext"][0]["users"][0].get("flow", ""),
-                                     endpoint["auth"]["flow"])
+                        self.assertEqual(
+                            outbound["streamSettings"]["xhttpSettings"],
+                            endpoint["transport"]["settings"],
+                        )
+                    self.assertEqual(
+                        outbound["settings"]["vnext"][0]["users"][0].get("flow", ""),
+                        endpoint["auth"]["flow"],
+                    )
                     config = {
-                        "inbounds": [{"tag": "local", "listen": "127.0.0.1", "port": 1080,
-                                      "protocol": "socks", "settings": {"auth": "noauth"}}],
+                        "inbounds": [
+                            {
+                                "tag": "local",
+                                "listen": "127.0.0.1",
+                                "port": 1080,
+                                "protocol": "socks",
+                                "settings": {"auth": "noauth"},
+                            }
+                        ],
                         "outbounds": [outbound],
                     }
                     family = "ipv6" if ":" in address else "dns"
-                    self.validate_native(config, f"outbound-{transport}-{security}-{mode}-{family}")
+                    self.validate_native(
+                        config, f"outbound-{transport}-{security}-{mode}-{family}"
+                    )
 
     def modes(self, transport, security):
         if transport == "tcp":
@@ -163,28 +226,53 @@ class NativeTransportTests(unittest.TestCase):
                 settings.pop("public_key", None)
                 settings.pop("short_id", None)
                 if security == "reality":
-                    settings.update({"private_key": self.private_key, "short_ids": ["a1b2c3d4"],
-                                     "target": "www.example.com:443"})
+                    settings.update(
+                        {
+                            "private_key": self.private_key,
+                            "short_ids": ["a1b2c3d4"],
+                            "target": "www.example.com:443",
+                        }
+                    )
                 else:
-                    settings["certificates"] = [{"certificateFile": "/work/certificate.pem",
-                                                  "keyFile": "/work/key.pem"}]
+                    settings["certificates"] = [
+                        {
+                            "certificateFile": "/work/certificate.pem",
+                            "keyFile": "/work/key.pem",
+                        }
+                    ]
                 stream = self.transports.render_stream(
-                    endpoint["transport"], endpoint["security"], server=True,
+                    endpoint["transport"],
+                    endpoint["security"],
+                    server=True,
                 )
                 self.assertEqual(stream["network"], transport)
                 self.assertEqual(stream["security"], security)
                 if transport == "xhttp":
-                    self.assertEqual(stream["xhttpSettings"], endpoint["transport"]["settings"])
+                    self.assertEqual(
+                        stream["xhttpSettings"], endpoint["transport"]["settings"]
+                    )
                 config = {
-                    "inbounds": [{
-                        "tag": "native", "listen": "127.0.0.1", "port": endpoint["port"],
-                        "protocol": "vless",
-                        "settings": {"decryption": "none", "clients": [{
-                            "id": endpoint["auth"]["id"], "flow": endpoint["auth"]["flow"],
-                        }]},
-                        "streamSettings": stream,
-                    }],
-                    "outbounds": [{"tag": "direct", "protocol": "freedom", "settings": {}}],
+                    "inbounds": [
+                        {
+                            "tag": "native",
+                            "listen": "127.0.0.1",
+                            "port": endpoint["port"],
+                            "protocol": "vless",
+                            "settings": {
+                                "decryption": "none",
+                                "clients": [
+                                    {
+                                        "id": endpoint["auth"]["id"],
+                                        "flow": endpoint["auth"]["flow"],
+                                    }
+                                ],
+                            },
+                            "streamSettings": stream,
+                        }
+                    ],
+                    "outbounds": [
+                        {"tag": "direct", "protocol": "freedom", "settings": {}}
+                    ],
                 }
                 self.validate_native(config, f"inbound-{transport}-{security}-{mode}")
 

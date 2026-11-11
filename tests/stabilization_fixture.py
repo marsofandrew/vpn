@@ -1,3 +1,12 @@
+import vpn_transports
+from vpn_manager import accounting as app_accounting
+from vpn_manager import settings as app_settings
+from vpn_manager.cli import entrypoint as app_cli_entrypoint
+from vpn_manager.exports import links as app_exports_links
+from vpn_manager.state import creation as app_state_creation
+from vpn_manager.state import storage as app_state_storage
+from vpn_manager.xray import rendering as app_xray_rendering
+
 """Private Linux/Docker topology for the opt-in stabilization tests.
 
 Xray 26.10.31 defaults to its embedded CA bundle. The fixture-scoped outbound
@@ -10,14 +19,11 @@ Services explicitly run as 0:0, matching production Compose. Host UID mapping
 and Linux bind-mount access still require verification in the live suite.
 """
 
-from contextlib import redirect_stderr, redirect_stdout
 import datetime
 import http.client
 import http.server
-from io import StringIO
 import json
 import os
-from pathlib import Path
 import platform
 import re
 import select
@@ -29,11 +35,11 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
 import uuid
-
-import vpnctl
-
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+from pathlib import Path
+from unittest.mock import patch
 
 IMAGE = "ghcr.io/xtls/xray-core:26.10.31"
 BODY = bytes(range(256)) * 512
@@ -41,7 +47,7 @@ BODY = bytes(range(256)) * 512
 
 def fixture_tls_roots():
     """Return a scoped patch of the renderer shared by vpnctl and vpn_monitor."""
-    renderer = vpnctl.vpn_transports.render_outbound
+    renderer = vpn_transports.render_outbound
 
     def render_outbound(upstream, tag):
         outbound = renderer(upstream, tag)
@@ -50,11 +56,13 @@ def fixture_tls_roots():
             stream["tlsSettings"]["useSystemCA"] = True
         return outbound
 
-    return patch.object(vpnctl.vpn_transports, "render_outbound", render_outbound)
+    return patch.object(vpn_transports, "render_outbound", render_outbound)
 
 
 def command(args, timeout=45):
-    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(
+        args, check=True, capture_output=True, text=True, timeout=timeout
+    )
 
 
 def require_runtime():
@@ -64,18 +72,31 @@ def require_runtime():
             "Docker Desktop on macOS/Windows is unsupported"
         )
     if not shutil.which("docker"):
-        raise unittest.SkipTest("stabilization integration requires Docker and Docker Compose")
+        raise unittest.SkipTest(
+            "stabilization integration requires Docker and Docker Compose"
+        )
     try:
         command(["docker", "compose", "version"])
         context = json.loads(command(["docker", "context", "inspect"]).stdout)
-        endpoint = os.environ.get("DOCKER_HOST", context[0]["Endpoints"]["docker"]["Host"])
+        endpoint = os.environ.get(
+            "DOCKER_HOST", context[0]["Endpoints"]["docker"]["Host"]
+        )
         if not endpoint.startswith("unix://"):
-            raise unittest.SkipTest("stabilization requires a local Unix-socket Docker daemon")
+            raise unittest.SkipTest(
+                "stabilization requires a local Unix-socket Docker daemon"
+            )
         info = json.loads(command(["docker", "info", "--format", "{{json .}}"]).stdout)
-        if info.get("OSType") != "linux" or "docker desktop" in info.get("OperatingSystem", "").lower():
-            raise unittest.SkipTest("stabilization requires native Linux Docker host networking")
+        if (
+            info.get("OSType") != "linux"
+            or "docker desktop" in info.get("OperatingSystem", "").lower()
+        ):
+            raise unittest.SkipTest(
+                "stabilization requires native Linux Docker host networking"
+            )
     except (OSError, subprocess.SubprocessError) as error:
-        raise unittest.SkipTest("local Docker/Compose unavailable: " + type(error).__name__) from None
+        raise unittest.SkipTest(
+            "local Docker/Compose unavailable: " + type(error).__name__
+        ) from None
     try:
         command(["docker", "image", "inspect", IMAGE])
     except subprocess.CalledProcessError:
@@ -84,11 +105,25 @@ def require_runtime():
         except (OSError, subprocess.SubprocessError) as error:
             detail = (getattr(error, "stderr", "") or "")[-1000:]
             raise RuntimeError(
-                "required official image " + IMAGE + " unavailable; no fallback is permitted: "
-                + type(error).__name__ + (": " + detail if detail else "")
+                "required official image "
+                + IMAGE
+                + " unavailable; no fallback is permitted: "
+                + type(error).__name__
+                + (": " + detail if detail else "")
             ) from None
-    version = command(["docker", "run", "--rm", "--network", "none", "--entrypoint", "xray",
-                       IMAGE, "version"]).stdout
+    version = command(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--entrypoint",
+            "xray",
+            IMAGE,
+            "version",
+        ]
+    ).stdout
     if not re.search(r"\bXray 26\.10\.31\b", version):
         raise AssertionError("official image did not report Xray 26.10.31")
 
@@ -230,8 +265,9 @@ class HttpsFixture(http.server.ThreadingHTTPServer):
     def get_request(self):
         connection, address = super().get_request()
         connection.settimeout(5)
-        return self.context.wrap_socket(connection, server_side=True,
-                                        do_handshake_on_connect=False), address
+        return self.context.wrap_socket(
+            connection, server_side=True, do_handshake_on_connect=False
+        ), address
 
 
 class StabilizationFixture:
@@ -239,9 +275,11 @@ class StabilizationFixture:
         self.case = case
         with socket.socket() as listener:
             try:
-                listener.bind(("127.0.0.1", vpnctl.DEFAULT_API_PORT))
+                listener.bind(("127.0.0.1", app_settings.DEFAULT_API_PORT))
             except OSError:
-                raise unittest.SkipTest("gateway API port 10085 is occupied; existing services are left untouched")
+                raise unittest.SkipTest(
+                    "gateway API port 10085 is occupied; existing services are left untouched"
+                )
         temporary = tempfile.TemporaryDirectory(prefix="xray-stabilization-")
         case.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
@@ -249,11 +287,14 @@ class StabilizationFixture:
         self.compose_file = self.root / "compose.json"
         self.config_path = self.root / "gateway.json"
         self.state_path = self.root / "state.json"
-        environment = patch.dict(os.environ, {
-            "COMPOSE_PROJECT_NAME": self.project,
-            "SSL_CERT_FILE": str(self.root / "cert.pem"),
-            "XRAY_CONFIG_PATH": str(self.config_path),
-        })
+        environment = patch.dict(
+            os.environ,
+            {
+                "COMPOSE_PROJECT_NAME": self.project,
+                "SSL_CERT_FILE": str(self.root / "cert.pem"),
+                "XRAY_CONFIG_PATH": str(self.config_path),
+            },
+        )
         environment.start()
         case.addCleanup(environment.stop)
         trust = fixture_tls_roots()
@@ -269,11 +310,14 @@ class StabilizationFixture:
         self.http.context.set_ecdh_curve("X25519")
         self.http.context.set_alpn_protocols(["h2", "http/1.1"])
         self.http.context.load_cert_chain(self.root / "cert.pem", self.root / "key.pem")
-        self.http_thread = threading.Thread(target=self.http.serve_forever,
-                                            kwargs={"poll_interval": 0.1}, daemon=True)
+        self.http_thread = threading.Thread(
+            target=self.http.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True
+        )
         self.http_thread.start()
         case.addCleanup(self.stop_http)
-        self.ny_tcp_port, self.ny_tls_port, self.gateway_port, self.socks_port = free_ports(4)
+        self.ny_tcp_port, self.ny_tls_port, self.gateway_port, self.socks_port = (
+            free_ports(4)
+        )
         self.proxy = FaultProxy(("127.0.0.1", self.ny_tcp_port))
         case.addCleanup(self.proxy.close)
         self.reality_target = "origin.example.test:" + str(self.http.server_port)
@@ -281,8 +325,17 @@ class StabilizationFixture:
         case.addCleanup(self.stop_containers)
         self.compose("up", "-d", "ny")
         container = self.compose("ps", "-q", "ny").stdout.strip()
-        networks = json.loads(command(["docker", "inspect", "--format",
-                                       "{{json .NetworkSettings.Networks}}", container]).stdout)
+        networks = json.loads(
+            command(
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{json .NetworkSettings.Networks}}",
+                    container,
+                ]
+            ).stdout
+        )
         case.assertEqual(len(networks), 1, "NY must have one isolated bridge interface")
         self.exit_ip = next(iter(networks.values()))["IPAddress"]
         case.assertTrue(self.exit_ip, "NY bridge address is missing")
@@ -298,89 +351,188 @@ class StabilizationFixture:
         from cryptography.x509.oid import NameOID
 
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "origin.example.test")])
+        name = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "origin.example.test")]
+        )
         now = datetime.datetime.now(datetime.timezone.utc)
-        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
-                .public_key(key.public_key()).serial_number(x509.random_serial_number())
-                .not_valid_before(now - datetime.timedelta(minutes=5))
-                .not_valid_after(now + datetime.timedelta(days=1))
-                .add_extension(x509.SubjectAlternativeName([
-                    x509.DNSName("origin.example.test"), x509.DNSName("host.docker.internal"),
-                ]), critical=False)
-                .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
-                .sign(key, hashes.SHA256()))
-        private_write(self.root / "cert.pem", cert.public_bytes(serialization.Encoding.PEM))
-        private_write(self.root / "key.pem", key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption()))
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(minutes=5))
+            .not_valid_after(now + datetime.timedelta(days=1))
+            .add_extension(
+                x509.SubjectAlternativeName(
+                    [
+                        x509.DNSName("origin.example.test"),
+                        x509.DNSName("host.docker.internal"),
+                    ]
+                ),
+                critical=False,
+            )
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .sign(key, hashes.SHA256())
+        )
+        private_write(
+            self.root / "cert.pem", cert.public_bytes(serialization.Encoding.PEM)
+        )
+        private_write(
+            self.root / "key.pem",
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ),
+        )
 
     def make_configs(self):
-        state = vpnctl.create_state("127.0.0.1", self.reality_target, "fixture.test",
-                                    self.gateway_port, ["fixture"], None)
-        ny = vpnctl.create_state("127.0.0.1", self.reality_target, "fixture.test",
-                                 18443, ["exit"], None)
+        state = app_state_creation.create_state(
+            "127.0.0.1",
+            self.reality_target,
+            "fixture.test",
+            self.gateway_port,
+            ["fixture"],
+            None,
+        )
+        ny = app_state_creation.create_state(
+            "127.0.0.1", self.reality_target, "fixture.test", 18443, ["exit"], None
+        )
         profile = ny["profiles"][0]
-        primary = vpnctl.vpn_transports.parse_link(vpnctl.generate_vless_link(
-            profile["clients"][0], ny, profile))
+        primary = vpn_transports.parse_link(
+            app_exports_links.generate_vless_link(profile["clients"][0], ny, profile)
+        )
         primary["port"] = self.proxy.port
-        fallback = vpnctl.vpn_transports.parse_link(
+        fallback = vpn_transports.parse_link(
             f"vless://{profile['clients'][0]['id']}@127.0.0.1:{self.ny_tls_port}"
-            "?security=tls&type=xhttp&sni=origin.example.test&path=%2Fstabilization&mode=stream-one")
-        state["node"] = {"id": "fixture-gateway", "role": "gateway", "foreign_only": True}
+            "?security=tls&type=xhttp&sni=origin.example.test&path=%2Fstabilization&mode=stream-one"
+        )
+        state["node"] = {
+            "id": "fixture-gateway",
+            "role": "gateway",
+            "foreign_only": True,
+        }
         state["upstreams"] = {"ny-primary": primary, "ny-tls": fallback}
-        state["routing_policies"].update({
-            "ny-primary": {"type": "upstream", "upstreams": ["ny-primary"]},
-            "ny-tls": {"type": "upstream", "upstreams": ["ny-tls"]},
-        })
+        state["routing_policies"].update(
+            {
+                "ny-primary": {"type": "upstream", "upstreams": ["ny-primary"]},
+                "ny-tls": {"type": "upstream", "upstreams": ["ny-tls"]},
+            }
+        )
         state["profiles"][0].update(route="ny-primary", outbound_mode="proxy")
-        vpnctl.save_state(self.state_path, state)
-        private_write(self.config_path, json.dumps(vpnctl.render_config(state)).encode())
+        app_state_storage.save_state(self.state_path, state)
+        private_write(
+            self.config_path,
+            json.dumps(app_xray_rendering.render_config(state)).encode(),
+        )
         tls_inbound = {
-            "tag": "ny-tls", "listen": "0.0.0.0", "port": 18444, "protocol": "vless",
-            "settings": {"decryption": "none", "clients": [{"id": profile["clients"][0]["id"]}]},
-            "streamSettings": vpnctl.vpn_transports.render_stream(fallback["transport"], {
-                "type": "tls", "settings": {"alpn": ["h2", "http/1.1"], "certificates": [{
-                    "certificateFile": "/work/cert.pem", "keyFile": "/work/key.pem",
-                }]},
-            }, server=True),
+            "tag": "ny-tls",
+            "listen": "0.0.0.0",
+            "port": 18444,
+            "protocol": "vless",
+            "settings": {
+                "decryption": "none",
+                "clients": [{"id": profile["clients"][0]["id"]}],
+            },
+            "streamSettings": vpn_transports.render_stream(
+                fallback["transport"],
+                {
+                    "type": "tls",
+                    "settings": {
+                        "alpn": ["h2", "http/1.1"],
+                        "certificates": [
+                            {
+                                "certificateFile": "/work/cert.pem",
+                                "keyFile": "/work/key.pem",
+                            }
+                        ],
+                    },
+                },
+                server=True,
+            ),
         }
         configs = {
-            "ny": {"log": {"loglevel": "warning"},
-                   "inbounds": [vpnctl.render_vless_inbound(ny, profile), tls_inbound],
-                   "outbounds": [{"tag": "exit", "protocol": "freedom", "settings": {}}]},
-            "client": {"log": {"loglevel": "warning"}, "inbounds": [{
-                "listen": "127.0.0.1", "port": self.socks_port, "protocol": "socks",
-                "settings": {"auth": "noauth", "udp": False},
-            }], "outbounds": [vpnctl.vpn_transports.render_outbound(
-                vpnctl.vpn_transports.parse_link(vpnctl.generate_vless_link(
-                    state["profiles"][0]["clients"][0], state, state["profiles"][0])), "gateway")]},
+            "ny": {
+                "log": {"loglevel": "warning"},
+                "inbounds": [
+                    app_xray_rendering.render_vless_inbound(ny, profile),
+                    tls_inbound,
+                ],
+                "outbounds": [{"tag": "exit", "protocol": "freedom", "settings": {}}],
+            },
+            "client": {
+                "log": {"loglevel": "warning"},
+                "inbounds": [
+                    {
+                        "listen": "127.0.0.1",
+                        "port": self.socks_port,
+                        "protocol": "socks",
+                        "settings": {"auth": "noauth", "udp": False},
+                    }
+                ],
+                "outbounds": [
+                    vpn_transports.render_outbound(
+                        vpn_transports.parse_link(
+                            app_exports_links.generate_vless_link(
+                                state["profiles"][0]["clients"][0],
+                                state,
+                                state["profiles"][0],
+                            )
+                        ),
+                        "gateway",
+                    )
+                ],
+            },
         }
         services = {}
         for name in ("ny", "client", "xray"):
-            config_path = self.config_path if name == "xray" else self.root / (name + ".json")
+            config_path = (
+                self.config_path if name == "xray" else self.root / (name + ".json")
+            )
             target = "/etc/xray/config.json"
             services[name] = {
-                "image": IMAGE, "entrypoint": ["xray"], "user": "0:0",
+                "image": IMAGE,
+                "entrypoint": ["xray"],
+                "user": "0:0",
                 "command": ["run", "-config", target],
-                "read_only": True, "cap_drop": ["ALL"],
+                "read_only": True,
+                "cap_drop": ["ALL"],
                 "security_opt": ["no-new-privileges:true"],
                 "environment": {"SSL_CERT_FILE": "/work/cert.pem"},
                 "volumes": [f"{config_path}:{target}:ro", f"{self.root}:/work:ro"],
-                "extra_hosts": ["host.docker.internal:host-gateway",
-                                "origin.example.test:" + ("host-gateway" if name == "ny" else "127.0.0.1")],
+                "extra_hosts": [
+                    "host.docker.internal:host-gateway",
+                    "origin.example.test:"
+                    + ("host-gateway" if name == "ny" else "127.0.0.1"),
+                ],
             }
             if name == "ny":
-                services[name]["ports"] = [f"127.0.0.1:{self.ny_tcp_port}:18443",
-                                            f"127.0.0.1:{self.ny_tls_port}:18444"]
+                services[name]["ports"] = [
+                    f"127.0.0.1:{self.ny_tcp_port}:18443",
+                    f"127.0.0.1:{self.ny_tls_port}:18444",
+                ]
             else:
                 services[name]["network_mode"] = "host"
         for name, config in configs.items():
             private_write(self.root / (name + ".json"), json.dumps(config).encode())
-        private_write(self.compose_file, json.dumps({"name": self.project, "services": services}).encode())
+        private_write(
+            self.compose_file,
+            json.dumps({"name": self.project, "services": services}).encode(),
+        )
 
     def compose(self, *args):
-        return command(["docker", "compose", "--project-name", self.project,
-                        "--file", str(self.compose_file), *args])
+        return command(
+            [
+                "docker",
+                "compose",
+                "--project-name",
+                self.project,
+                "--file",
+                str(self.compose_file),
+                *args,
+            ]
+        )
 
     def stop_containers(self):
         self.compose("down", "--volumes", "--timeout", "5")
@@ -390,8 +542,12 @@ class StabilizationFixture:
         context = ssl.create_default_context()
         while time.monotonic() < deadline:
             try:
-                with socket.create_connection(("127.0.0.1", self.ny_tls_port), timeout=0.5) as connection:
-                    with context.wrap_socket(connection, server_hostname="origin.example.test"):
+                with socket.create_connection(
+                    ("127.0.0.1", self.ny_tls_port), timeout=0.5
+                ) as connection:
+                    with context.wrap_socket(
+                        connection, server_hostname="origin.example.test"
+                    ):
                         return
             except OSError:
                 time.sleep(0.1)
@@ -406,18 +562,32 @@ class StabilizationFixture:
     def cli(self, *args):
         output = StringIO()
         with redirect_stdout(output), redirect_stderr(output):
-            code = vpnctl.main(["--state", str(self.state_path), "--config", str(self.config_path),
-                                "--compose-file", str(self.compose_file), *args])
-        self.case.assertEqual(code, 0, "vpnctl " + " ".join(args[:2]) + " failed: " + output.getvalue())
+            code = app_cli_entrypoint.main(
+                [
+                    "--state",
+                    str(self.state_path),
+                    "--config",
+                    str(self.config_path),
+                    "--compose-file",
+                    str(self.compose_file),
+                    *args,
+                ]
+            )
+        self.case.assertEqual(
+            code, 0, "vpnctl " + " ".join(args[:2]) + " failed: " + output.getvalue()
+        )
         return self.state()
 
     def state(self):
-        return vpnctl.load_state(self.state_path)
+        return app_state_storage.load_state(self.state_path)
 
     @staticmethod
     def usage(state):
         client = state["profiles"][0]["clients"][0]
-        return tuple(client["used_" + direction + "_bytes"] for direction in ("uplink", "downlink"))
+        return tuple(
+            client["used_" + direction + "_bytes"]
+            for direction in ("uplink", "downlink")
+        )
 
     def settled_usage(self, minimum_downlink=0):
         previous, repeats = None, 0
@@ -426,14 +596,18 @@ class StabilizationFixture:
             state = self.cli("usage", "--refresh")
             current = self.usage(state)
             if previous is not None:
-                self.case.assertTrue(all(a >= b for a, b in zip(current, previous)),
-                                     "usage polling moved backwards")
+                self.case.assertTrue(
+                    all(a >= b for a, b in zip(current, previous)),
+                    "usage polling moved backwards",
+                )
             repeats = repeats + 1 if current == previous else 0
             if repeats >= 2 and current[1] >= minimum_downlink:
                 return state
             previous = current
             time.sleep(0.15)
-        self.case.fail("live Xray usage did not settle above the transferred byte count")
+        self.case.fail(
+            "live Xray usage did not settle above the transferred byte count"
+        )
 
     @staticmethod
     def read_exact(connection, count):
@@ -449,7 +623,9 @@ class StabilizationFixture:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             try:
-                with socket.create_connection(("127.0.0.1", self.socks_port), timeout=0.5) as connection:
+                with socket.create_connection(
+                    ("127.0.0.1", self.socks_port), timeout=0.5
+                ) as connection:
                     connection.sendall(b"\x05\x01\x00")
                     if self.read_exact(connection, 2) == b"\x05\x00":
                         return
@@ -462,13 +638,19 @@ class StabilizationFixture:
         deadline = time.monotonic() + 6
         context = ssl.create_default_context()
         host = b"host.docker.internal"
-        with socket.create_connection(("127.0.0.1", self.socks_port), timeout=2) as connection:
+        with socket.create_connection(
+            ("127.0.0.1", self.socks_port), timeout=2
+        ) as connection:
             connection.settimeout(max(0.01, deadline - time.monotonic()))
             connection.sendall(b"\x05\x01\x00")
             if self.read_exact(connection, 2) != b"\x05\x00":
                 raise ConnectionError("SOCKS greeting rejected")
-            connection.sendall(b"\x05\x01\x00\x03" + bytes([len(host)]) + host
-                               + self.http.server_port.to_bytes(2, "big"))
+            connection.sendall(
+                b"\x05\x01\x00\x03"
+                + bytes([len(host)])
+                + host
+                + self.http.server_port.to_bytes(2, "big")
+            )
             reply = self.read_exact(connection, 4)
             if reply[:3] != b"\x05\x00\x00":
                 raise ConnectionError("SOCKS CONNECT rejected")
@@ -483,13 +665,19 @@ class StabilizationFixture:
             self.read_exact(connection, 2)
             connection.settimeout(max(0.01, deadline - time.monotonic()))
             with context.wrap_socket(connection, server_hostname=host.decode()) as tls:
-                tls.sendall((f"GET {self.http.prefix}/{suffix} HTTP/1.1\r\n"
-                             "Host: host.docker.internal\r\nConnection: close\r\n\r\n").encode())
+                tls.sendall(
+                    (
+                        f"GET {self.http.prefix}/{suffix} HTTP/1.1\r\n"
+                        "Host: host.docker.internal\r\nConnection: close\r\n\r\n"
+                    ).encode()
+                )
                 tls.settimeout(max(0.01, deadline - time.monotonic()))
                 with http.client.HTTPResponse(tls) as response:
                     response.begin()
                     if response.status != 200:
-                        raise ConnectionError("fixture returned an unsuccessful HTTP response")
+                        raise ConnectionError(
+                            "fixture returned an unsuccessful HTTP response"
+                        )
                     result = bytearray()
                     while True:
                         remaining = deadline - time.monotonic()
@@ -505,9 +693,14 @@ class StabilizationFixture:
                     return bytes(result)
 
     def transfer(self):
-        self.case.assertEqual(self.request("body"), BODY, "known 128 KiB body was corrupted")
-        self.case.assertEqual(json.loads(self.request("egress")), {"ip": self.exit_ip},
-                              "HTTPS fixture did not observe the real NY container peer IP")
+        self.case.assertEqual(
+            self.request("body"), BODY, "known 128 KiB body was corrupted"
+        )
+        self.case.assertEqual(
+            json.loads(self.request("egress")),
+            {"ip": self.exit_ip},
+            "HTTPS fixture did not observe the real NY container peer IP",
+        )
 
     def request_count(self):
         with self.http.lock:
@@ -517,13 +710,26 @@ class StabilizationFixture:
         before = self.request_count()
         with self.case.assertRaises((OSError, http.client.HTTPException)):
             self.request("body")
-        self.case.assertEqual(self.request_count(), before, "blocked traffic reached the HTTPS origin")
+        self.case.assertEqual(
+            self.request_count(), before, "blocked traffic reached the HTTPS origin"
+        )
 
     def outbound_counters(self):
-        completed = self.compose("exec", "-T", "xray", "xray", "api", "statsquery",
-                                  "--server=127.0.0.1:10085", "-pattern", "outbound>>>")
-        return {entry["name"]: int(entry.get("value") or 0)
-                for entry in vpnctl.stat_entries(json.loads(completed.stdout))}
+        completed = self.compose(
+            "exec",
+            "-T",
+            "xray",
+            "xray",
+            "api",
+            "statsquery",
+            "--server=127.0.0.1:10085",
+            "-pattern",
+            "outbound>>>",
+        )
+        return {
+            entry["name"]: int(entry.get("value") or 0)
+            for entry in app_accounting.stat_entries(json.loads(completed.stdout))
+        }
 
     def assert_traffic_route(self, selected):
         before = self.outbound_counters()
@@ -536,8 +742,11 @@ class StabilizationFixture:
                 for other in {"ny-primary", "ny-tls"} - {selected}:
                     for direction in ("uplink", "downlink"):
                         other_key = f"outbound>>>{other}>>>traffic>>>{direction}"
-                        self.case.assertEqual(after.get(other_key, 0), before.get(other_key, 0),
-                                              "inactive gateway upstream carried client traffic")
+                        self.case.assertEqual(
+                            after.get(other_key, 0),
+                            before.get(other_key, 0),
+                            "inactive gateway upstream carried client traffic",
+                        )
                 return
             time.sleep(0.1)
         self.case.fail("selected gateway outbound did not carry the fixture body")
@@ -545,19 +754,53 @@ class StabilizationFixture:
     def configure_health(self, cooldown=30):
         for name in ("ny-primary", "ny-tls"):
             base = f"https://host.docker.internal:{self.http.server_port}{self.http.prefix}"
-            self.cli("health", "configure", name, "--download-url", base + "/body",
-                     "--egress-url", base + "/egress", "--expected-exit-ip", self.exit_ip,
-                     "--interval", "0.1", "--fail-threshold", "2", "--success-threshold", "2",
-                     "--timeout", "4")
-        self.cli("policy", "set", "foreign", "--type", "priority", "--upstream", "ny-primary",
-                 "--upstream", "ny-tls", "--cooldown", str(cooldown))
+            self.cli(
+                "health",
+                "configure",
+                name,
+                "--download-url",
+                base + "/body",
+                "--egress-url",
+                base + "/egress",
+                "--expected-exit-ip",
+                self.exit_ip,
+                "--interval",
+                "0.1",
+                "--fail-threshold",
+                "2",
+                "--success-threshold",
+                "2",
+                "--timeout",
+                "4",
+            )
+        self.cli(
+            "policy",
+            "set",
+            "foreign",
+            "--type",
+            "priority",
+            "--upstream",
+            "ny-primary",
+            "--upstream",
+            "ny-tls",
+            "--cooldown",
+            str(cooldown),
+        )
         self.cli("route", "set", "default", "--policy", "foreign")
 
     def health_check(self):
         state = self.state()
-        due = max((record.get("next_probe_at", 0) for record in state.get("health", {}).values()), default=0)
+        due = max(
+            (
+                record.get("next_probe_at", 0)
+                for record in state.get("health", {}).values()
+            ),
+            default=0,
+        )
         delay = due - time.time()
-        self.case.assertLessEqual(delay, 1, "fixture health interval unexpectedly changed")
+        self.case.assertLessEqual(
+            delay, 1, "fixture health interval unexpectedly changed"
+        )
         if delay > 0:
             time.sleep(delay + 0.01)
         return self.cli("health", "check")

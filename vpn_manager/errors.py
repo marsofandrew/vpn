@@ -1,0 +1,2 @@
+class VpnctlError(Exception):
+    pass

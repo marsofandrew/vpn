@@ -1,17 +1,23 @@
 import copy
 import math
 import unittest
+import uuid
 from unittest.mock import patch
 
 import vpn_health
 import vpn_transports
-import vpnctl
+from vpn_manager import clock as app_clock
+from vpn_manager import keys as app_keys
+from vpn_manager.state import creation as app_state_creation
+from vpn_manager.state import importing as app_state_importing
+from vpn_manager.state import migration as app_state_migration
+from vpn_manager.xray import rendering as app_xray_rendering
 from vpn_validation import validate_state_shape
 
 
 class StateValidationTests(unittest.TestCase):
     def setUp(self):
-        self.state = vpnctl.create_state(
+        self.state = app_state_creation.create_state(
             "vpn.example.com", "example.com:443", "example.com", 8443, ["phone"], None
         )
         self.endpoint = vpn_transports.parse_link(
@@ -56,7 +62,7 @@ class StateValidationTests(unittest.TestCase):
             },
             route_events=[
                 {
-                    "at": vpnctl.utc_now(),
+                    "at": app_clock.utc_now(),
                     "policy": "foreign",
                     "from": None,
                     "to": "exit",
@@ -92,9 +98,9 @@ class StateValidationTests(unittest.TestCase):
             before = copy.deepcopy(state)
             with (
                 patch.object(
-                    vpnctl, "generate_reality_keys", side_effect=AssertionError
+                    app_keys, "generate_reality_keys", side_effect=AssertionError
                 ),
-                patch.object(vpnctl.uuid, "uuid4", side_effect=AssertionError),
+                patch.object(uuid, "uuid4", side_effect=AssertionError),
             ):
                 self.assertIsNone(validate_state_shape(state))
             self.assertEqual(state, before)
@@ -163,8 +169,8 @@ class StateValidationTests(unittest.TestCase):
                             ],
                         },
                     }
-                imported = vpnctl.import_state_from_xray_config(
-                    vpnctl.render_config(state), state["server_host"]
+                imported = app_state_importing.import_state_from_xray_config(
+                    app_xray_rendering.render_config(state), state["server_host"]
                 )
                 before = copy.deepcopy(imported)
                 self.assertIsNone(validate_state_shape(imported))
@@ -204,7 +210,7 @@ class StateValidationTests(unittest.TestCase):
                         }
                     )
                     state.pop("profiles")
-                migrated = vpnctl.migrate_legacy_state(state)
+                migrated = app_state_migration.migrate_legacy_state(state)
                 before = copy.deepcopy(migrated)
                 self.assertIsNone(validate_state_shape(migrated))
                 profile = migrated["profiles"][0]

@@ -1,38 +1,61 @@
+from vpn_manager import files as atomic_files
+
 """Generated UUID/key fixtures and reserved addresses only; no live endpoints."""
 
 import base64
 import copy
 import os
-from pathlib import Path
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
+from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import quote, unquote, urlencode, urlsplit
-import uuid
 
 import vpn_subscriptions as subscriptions
 import vpn_transports
 
 
-def fixture_link(number=1, network="tcp", security="reality", host="gateway.example.com", label="", **changes):
-    query = {"type": network, "security": security, "sni": "origin.example.com", "encryption": "none"}
+def fixture_link(
+    number=1,
+    network="tcp",
+    security="reality",
+    host="gateway.example.com",
+    label="",
+    **changes,
+):
+    query = {
+        "type": network,
+        "security": security,
+        "sni": "origin.example.com",
+        "encryption": "none",
+    }
     if security == "reality":
-        query.update(pbk=base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("="),
-                     sid="ab12", fp="chrome", spx="/")
+        query.update(
+            pbk=base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("="),
+            sid="ab12",
+            fp="chrome",
+            spx="/",
+        )
         if network == "tcp":
             query["flow"] = "xtls-rprx-vision"
     if network == "xhttp":
-        query.update(path="/vpn/%61?item=a+b&literal=%2B", host="cdn.example.com",
-                     mode="stream-one" if security == "reality" else "auto")
+        query.update(
+            path="/vpn/%61?item=a+b&literal=%2B",
+            host="cdn.example.com",
+            mode="stream-one" if security == "reality" else "auto",
+        )
     if security == "tls":
         query.update(alpn="h2,http/1.1", allowInsecure="0")
     query.update(changes)
-    return (f"vless://{uuid.UUID(int=number)}@{host}:8443?"
-            + urlencode(query, quote_via=quote)
-            + ("#" + quote(label, safe="") if label else ""))
+    return (
+        f"vless://{uuid.UUID(int=number)}@{host}:8443?"
+        + urlencode(query, quote_via=quote)
+        + ("#" + quote(label, safe="") if label else "")
+    )
 
 
 def decoded_links(text):
@@ -41,13 +64,25 @@ def decoded_links(text):
 
 class SubscriptionTests(unittest.TestCase):
     def test_add_stores_canonical_endpoint_without_touching_other_state(self):
-        state = {"upstreams": {"server-route": {"unchanged": True}}, "profiles": ["sentinel"]}
+        state = {
+            "upstreams": {"server-route": {"unchanged": True}},
+            "profiles": ["sentinel"],
+        }
         original = copy.deepcopy(state)
         link = fixture_link(label="ignored incoming label")
         self.assertIsNone(subscriptions.add_endpoint(state, "gateway_1", "phone", link))
-        self.assertEqual(state, {**original, "client_entries": {
-            "gateway_1": {"client": "phone", "endpoint": vpn_transports.parse_link(link)},
-        }})
+        self.assertEqual(
+            state,
+            {
+                **original,
+                "client_entries": {
+                    "gateway_1": {
+                        "client": "phone",
+                        "endpoint": vpn_transports.parse_link(link),
+                    },
+                },
+            },
+        )
         endpoint = state["client_entries"]["gateway_1"]["endpoint"]
         self.assertTrue(endpoint["enabled"])
         self.assertEqual(endpoint["auth"]["id"], str(uuid.UUID(int=1)))
@@ -57,15 +92,32 @@ class SubscriptionTests(unittest.TestCase):
         subscriptions.add_endpoint(state, "Gateway", "phone", fixture_link())
         original = copy.deepcopy(state)
         for client in ("phone", "laptop"):
-            with self.subTest(client=client), self.assertRaisesRegex(ValueError, "already exists"):
+            with (
+                self.subTest(client=client),
+                self.assertRaisesRegex(ValueError, "already exists"),
+            ):
                 subscriptions.add_endpoint(state, "Gateway", client, fixture_link(2))
             self.assertEqual(state, original)
         subscriptions.add_endpoint(state, "gateway", "phone", fixture_link(2))
         self.assertEqual(list(state["client_entries"]), ["Gateway", "gateway"])
 
     def test_names_are_stable_ascii_and_never_sanitized(self):
-        for name in (None, 1, [], {}, "", "two words", " entry", "entry ", "entry/name",
-                     "entry.name", "entry#label", "entry\n", "entrée", "東京"):
+        for name in (
+            None,
+            1,
+            [],
+            {},
+            "",
+            "two words",
+            " entry",
+            "entry ",
+            "entry/name",
+            "entry.name",
+            "entry#label",
+            "entry\n",
+            "entrée",
+            "東京",
+        ):
             state = {}
             with self.subTest(name=name), self.assertRaises(ValueError):
                 subscriptions.add_endpoint(state, name, "phone", fixture_link())
@@ -74,8 +126,16 @@ class SubscriptionTests(unittest.TestCase):
             state = {}
             subscriptions.add_endpoint(state, name, "phone", fixture_link())
             self.assertEqual(list(state["client_entries"]), [name])
-            self.assertEqual(unquote(urlsplit(decoded_links(
-                subscriptions.subscription_text(state, "phone"))[0]).fragment), name)
+            self.assertEqual(
+                unquote(
+                    urlsplit(
+                        decoded_links(subscriptions.subscription_text(state, "phone"))[
+                            0
+                        ]
+                    ).fragment
+                ),
+                name,
+            )
 
     def test_invalid_clients_and_states_are_rejected(self):
         for client in (None, 1, [], {}, "", " ", "phone\n", "phone\x00", "\ud800"):
@@ -85,7 +145,13 @@ class SubscriptionTests(unittest.TestCase):
             self.assertEqual(state, {})
             with self.assertRaises(ValueError):
                 subscriptions.subscription_text(state, client, [fixture_link()])
-        for state in (None, [], "state", {"client_entries": None}, {"client_entries": []}):
+        for state in (
+            None,
+            [],
+            "state",
+            {"client_entries": None},
+            {"client_entries": []},
+        ):
             with self.subTest(state=state), self.assertRaises(ValueError):
                 subscriptions.add_endpoint(state, "entry", "phone", fixture_link())
             with self.assertRaises(ValueError):
@@ -95,21 +161,34 @@ class SubscriptionTests(unittest.TestCase):
 
     def test_failed_parse_preserves_state_including_absent_mapping(self):
         valid = fixture_link()
-        for link in (None, "", "https://example.com/subscription", valid + "&type=tcp",
-                     valid + "\n", valid.replace("security=reality", "security=none")):
+        for link in (
+            None,
+            "",
+            "https://example.com/subscription",
+            valid + "&type=tcp",
+            valid + "\n",
+            valid.replace("security=reality", "security=none"),
+        ):
             for state in ({}, {"client_entries": {}}):
                 original = copy.deepcopy(state)
-                with self.subTest(link=link, state=state), self.assertRaises(ValueError):
+                with (
+                    self.subTest(link=link, state=state),
+                    self.assertRaises(ValueError),
+                ):
                     subscriptions.add_endpoint(state, "entry", "phone", link)
                 self.assertEqual(state, original)
 
     def test_remove_changes_only_requested_entry(self):
         state = {"unrelated": "preserved"}
         subscriptions.add_endpoint(state, "gateway", "phone", fixture_link())
-        subscriptions.add_endpoint(state, "cdn", "phone", fixture_link(2, "xhttp", "tls"))
+        subscriptions.add_endpoint(
+            state, "cdn", "phone", fixture_link(2, "xhttp", "tls")
+        )
         retained = copy.deepcopy(state["client_entries"]["cdn"])
         self.assertIsNone(subscriptions.remove_endpoint(state, "gateway"))
-        self.assertEqual(state, {"unrelated": "preserved", "client_entries": {"cdn": retained}})
+        self.assertEqual(
+            state, {"unrelated": "preserved", "client_entries": {"cdn": retained}}
+        )
         original = copy.deepcopy(state)
         for name in ("gateway", "missing", "bad name", None):
             with self.subTest(name=name), self.assertRaises(ValueError):
@@ -143,11 +222,21 @@ class SubscriptionTests(unittest.TestCase):
                 self.assertEqual(url, vpn_transports.export_link(endpoint, name))
                 self.assertEqual(vpn_transports.parse_link(url), endpoint)
                 self.assertEqual(unquote(urlsplit(url).fragment), name)
-        state["client_entries"]["gateway"]["endpoint"]["auth"]["id"] = str(uuid.UUID(int=99))
-        self.assertEqual(state["client_entries"]["direct"], original["client_entries"]["direct"])
-        self.assertEqual(state["client_entries"]["cdn-tls"], original["client_entries"]["cdn-tls"])
-        reversed_state = {"client_entries": dict(reversed(list(original["client_entries"].items())))}
-        self.assertEqual(subscriptions.subscription_text(reversed_state, "phone"), encoded)
+        state["client_entries"]["gateway"]["endpoint"]["auth"]["id"] = str(
+            uuid.UUID(int=99)
+        )
+        self.assertEqual(
+            state["client_entries"]["direct"], original["client_entries"]["direct"]
+        )
+        self.assertEqual(
+            state["client_entries"]["cdn-tls"], original["client_entries"]["cdn-tls"]
+        )
+        reversed_state = {
+            "client_entries": dict(reversed(list(original["client_entries"].items())))
+        }
+        self.assertEqual(
+            subscriptions.subscription_text(reversed_state, "phone"), encoded
+        )
 
     def test_identical_links_under_distinct_names_remain_separate(self):
         state = {}
@@ -155,18 +244,30 @@ class SubscriptionTests(unittest.TestCase):
             subscriptions.add_endpoint(state, name, "phone", fixture_link())
         first, second = decoded_links(subscriptions.subscription_text(state, "phone"))
         self.assertNotEqual(first, second)
-        self.assertEqual(vpn_transports.parse_link(first), vpn_transports.parse_link(second))
+        self.assertEqual(
+            vpn_transports.parse_link(first), vpn_transports.parse_link(second)
+        )
 
     def test_only_enabled_matching_endpoints_are_exported(self):
         state = {}
-        for name, client in (("enabled", "phone"), ("disabled", "phone"), ("other", "laptop")):
+        for name, client in (
+            ("enabled", "phone"),
+            ("disabled", "phone"),
+            ("other", "laptop"),
+        ):
             subscriptions.add_endpoint(state, name, client, fixture_link())
         state["client_entries"]["disabled"]["endpoint"]["enabled"] = False
         state["client_entries"]["other"]["endpoint"] = {"unrelated": "not inspected"}
         original = copy.deepcopy(state)
         urls = decoded_links(subscriptions.subscription_text(state, "phone"))
-        self.assertEqual(urls, [vpn_transports.export_link(
-            state["client_entries"]["enabled"]["endpoint"], "enabled")])
+        self.assertEqual(
+            urls,
+            [
+                vpn_transports.export_link(
+                    state["client_entries"]["enabled"]["endpoint"], "enabled"
+                )
+            ],
+        )
         self.assertEqual(state, original)
         state["client_entries"]["enabled"]["endpoint"]["enabled"] = False
         with self.assertRaisesRegex(ValueError, "at least one"):
@@ -177,7 +278,9 @@ class SubscriptionTests(unittest.TestCase):
         subscriptions.add_endpoint(state, "gateway", "phone", fixture_link())
         endpoint = state["client_entries"]["gateway"]["endpoint"]
         del endpoint["enabled"]
-        self.assertEqual(len(decoded_links(subscriptions.subscription_text(state, "phone"))), 1)
+        self.assertEqual(
+            len(decoded_links(subscriptions.subscription_text(state, "phone"))), 1
+        )
         for value in (0, 1, "true", "false", None):
             endpoint["enabled"] = value
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -185,45 +288,89 @@ class SubscriptionTests(unittest.TestCase):
 
     def test_invalid_entry_wrappers_and_endpoints_are_rejected(self):
         endpoint = vpn_transports.parse_link(fixture_link())
-        for entry in (None, [], {}, {"client": "phone"}, {"endpoint": endpoint},
-                      {"client": "phone", "endpoint": endpoint, "enabled": True},
-                      {"client": None, "endpoint": endpoint}, {"client": "phone", "endpoint": {}},
-                      {"client": "phone", "endpoint": None}):
+        for entry in (
+            None,
+            [],
+            {},
+            {"client": "phone"},
+            {"endpoint": endpoint},
+            {"client": "phone", "endpoint": endpoint, "enabled": True},
+            {"client": None, "endpoint": endpoint},
+            {"client": "phone", "endpoint": {}},
+            {"client": "phone", "endpoint": None},
+        ):
             with self.subTest(entry=entry), self.assertRaises(ValueError):
-                subscriptions.subscription_text({"client_entries": {"entry": entry}}, "phone")
+                subscriptions.subscription_text(
+                    {"client_entries": {"entry": entry}}, "phone"
+                )
         for name in (1, "invalid name", "ümlaut"):
             with self.subTest(name=name), self.assertRaises(ValueError):
-                subscriptions.subscription_text({"client_entries": {
-                    name: {"client": "phone", "endpoint": endpoint},
-                }}, "phone")
+                subscriptions.subscription_text(
+                    {
+                        "client_entries": {
+                            name: {"client": "phone", "endpoint": endpoint},
+                        }
+                    },
+                    "phone",
+                )
 
     def test_explicit_local_links_keep_order_labels_and_canonical_content(self):
-        local = [fixture_link(8, "xhttp", "tls", label="Local + 東京 #1"),
-                 fixture_link(9, label="local-direct")]
+        local = [
+            fixture_link(8, "xhttp", "tls", label="Local + 東京 #1"),
+            fixture_link(9, label="local-direct"),
+        ]
         state = {}
         subscriptions.add_endpoint(state, "gateway", "phone", fixture_link())
         original_state, original_local = copy.deepcopy(state), list(local)
         urls = decoded_links(subscriptions.subscription_text(state, "phone", local))
         for provided, exported in zip(local, urls):
-            self.assertEqual(vpn_transports.parse_link(provided), vpn_transports.parse_link(exported))
-            self.assertEqual(unquote(urlsplit(provided).fragment), unquote(urlsplit(exported).fragment))
-            self.assertEqual(exported, vpn_transports.export_link(vpn_transports.parse_link(provided),
-                                                               unquote(urlsplit(provided).fragment)))
+            self.assertEqual(
+                vpn_transports.parse_link(provided), vpn_transports.parse_link(exported)
+            )
+            self.assertEqual(
+                unquote(urlsplit(provided).fragment),
+                unquote(urlsplit(exported).fragment),
+            )
+            self.assertEqual(
+                exported,
+                vpn_transports.export_link(
+                    vpn_transports.parse_link(provided),
+                    unquote(urlsplit(provided).fragment),
+                ),
+            )
         self.assertEqual(unquote(urlsplit(urls[-1]).fragment), "gateway")
         self.assertEqual(state, original_state)
         self.assertEqual(local, original_local)
         empty_state = {}
-        self.assertEqual(len(decoded_links(subscriptions.subscription_text(empty_state, "phone", local))), 2)
+        self.assertEqual(
+            len(
+                decoded_links(
+                    subscriptions.subscription_text(empty_state, "phone", local)
+                )
+            ),
+            2,
+        )
         self.assertEqual(empty_state, {})
 
     def test_empty_subscriptions_and_implicit_or_invalid_local_links_fail(self):
         for local in ((), []):
-            with self.subTest(local=local), self.assertRaisesRegex(ValueError, "at least one"):
+            with (
+                self.subTest(local=local),
+                self.assertRaisesRegex(ValueError, "at least one"),
+            ):
                 subscriptions.subscription_text({}, "phone", local)
-        for local in (fixture_link(), None, {}, {fixture_link()}, iter([fixture_link()]),
-                      [None], ["https://example.com/subscription"], [fixture_link() + "\n"],
-                      [fixture_link(), fixture_link() + "&type=tcp"],
-                      [fixture_link(1, "xhttp", "tls", allowInsecure="1")]):
+        for local in (
+            fixture_link(),
+            None,
+            {},
+            {fixture_link()},
+            iter([fixture_link()]),
+            [None],
+            ["https://example.com/subscription"],
+            [fixture_link() + "\n"],
+            [fixture_link(), fixture_link() + "&type=tcp"],
+            [fixture_link(1, "xhttp", "tls", allowInsecure="1")],
+        ):
             state = {}
             subscriptions.add_endpoint(state, "valid", "phone", fixture_link())
             original = copy.deepcopy(state)
@@ -253,8 +400,12 @@ assert 'vpnctl' not in sys.modules
 assert 'qrcode' not in sys.modules
 assert 'cryptography' not in sys.modules
 """
-        subprocess.run([sys.executable, "-I", "-S", "-B", "-c", code, str(root), fixture_link()],
-                       check=True, capture_output=True, text=True)
+        subprocess.run(
+            [sys.executable, "-I", "-S", "-B", "-c", code, str(root), fixture_link()],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
 
 class PrivateWriteTests(unittest.TestCase):
@@ -295,8 +446,10 @@ class PrivateWriteTests(unittest.TestCase):
             events.append("replace")
             real_replace(source, destination)
 
-        with patch.object(subscriptions.os, "fsync", side_effect=fsync), \
-                patch.object(subscriptions.os, "replace", side_effect=replace):
+        with (
+            patch.object(atomic_files.os, "fsync", side_effect=fsync),
+            patch.object(atomic_files.os, "replace", side_effect=replace),
+        ):
             subscriptions.private_write(self.path, "replacement")
         self.assertEqual(events, ["file-sync", "replace", "directory-sync"])
 
@@ -304,9 +457,11 @@ class PrivateWriteTests(unittest.TestCase):
         for operation in ("mkstemp", "fchmod", "fdopen", "fsync", "replace"):
             self.path.write_bytes(b"old artifact")
             self.path.chmod(0o600)
-            owner = subscriptions.tempfile if operation == "mkstemp" else subscriptions.os
-            with self.subTest(operation=operation), \
-                    patch.object(owner, operation, side_effect=OSError("injected failure")):
+            owner = atomic_files.tempfile if operation == "mkstemp" else atomic_files.os
+            with (
+                self.subTest(operation=operation),
+                patch.object(owner, operation, side_effect=OSError("injected failure")),
+            ):
                 with self.assertRaises(OSError):
                     subscriptions.private_write(self.path, "replacement")
             self.assertEqual(self.path.read_bytes(), b"old artifact")
@@ -332,14 +487,16 @@ class PrivateWriteTests(unittest.TestCase):
                 self.handle.flush()
                 raise OSError("injected partial write")
 
-        with patch.object(subscriptions.os, "fdopen", side_effect=FailedWriter):
+        with patch.object(atomic_files.os, "fdopen", side_effect=FailedWriter):
             with self.assertRaises(OSError):
                 subscriptions.private_write(self.path, "replacement")
         self.assertEqual(self.path.read_bytes(), b"old artifact")
         self.assertEqual(list(self.root.iterdir()), [self.path])
 
     def test_failed_new_export_leaves_no_artifact(self):
-        with patch.object(subscriptions.os, "replace", side_effect=OSError("injected failure")):
+        with patch.object(
+            atomic_files.os, "replace", side_effect=OSError("injected failure")
+        ):
             with self.assertRaises(OSError):
                 subscriptions.private_write(self.path, "replacement")
         self.assertEqual(list(self.root.iterdir()), [])
@@ -353,7 +510,7 @@ class PrivateWriteTests(unittest.TestCase):
                 raise OSError("directory sync failed")
             real_fsync(descriptor)
 
-        with patch.object(subscriptions.os, "fsync", side_effect=fsync):
+        with patch.object(atomic_files.os, "fsync", side_effect=fsync):
             with self.assertRaisesRegex(OSError, "directory sync failed"):
                 subscriptions.private_write(self.path, "replacement")
         self.assertEqual(self.path.read_text(), "replacement")
@@ -372,7 +529,10 @@ class PrivateWriteTests(unittest.TestCase):
     def test_invalid_content_leaves_existing_output_unchanged(self):
         self.path.write_bytes(b"old artifact")
         for content in (None, b"bytes", 1, "\ud800"):
-            with self.subTest(content=content), self.assertRaises((ValueError, UnicodeError)):
+            with (
+                self.subTest(content=content),
+                self.assertRaises((ValueError, UnicodeError)),
+            ):
                 subscriptions.private_write(self.path, content)
             self.assertEqual(self.path.read_bytes(), b"old artifact")
             self.assertEqual(list(self.root.iterdir()), [self.path])

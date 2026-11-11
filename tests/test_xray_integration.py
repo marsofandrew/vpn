@@ -7,10 +7,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import vpnctl
+import vpn_transports
+from vpn_manager import accounting as app_accounting
+from vpn_manager import errors as app_errors
+from vpn_manager import files as app_files
+from vpn_manager import keys as app_keys
+from vpn_manager.state import creation as app_state_creation
+from vpn_manager.state import storage as app_state_storage
+from vpn_manager.xray import deployment as app_xray_deployment
+from vpn_manager.xray import rendering as app_xray_rendering
+from vpn_manager.xray import runtime as app_xray_runtime
 
 
-@unittest.skipUnless(os.environ.get("XRAY_INTEGRATION") == "1", "set XRAY_INTEGRATION=1 for Docker tests")
+@unittest.skipUnless(
+    os.environ.get("XRAY_INTEGRATION") == "1", "set XRAY_INTEGRATION=1 for Docker tests"
+)
 class XrayIntegrationTests(unittest.TestCase):
     def test_native_validation_recreation_accounting_and_rollback(self):
         with tempfile.TemporaryDirectory(prefix="vpnctl-integration-") as directory:
@@ -21,63 +32,103 @@ class XrayIntegrationTests(unittest.TestCase):
             with socket.socket() as listener:
                 listener.bind(("127.0.0.1", 0))
                 port = listener.getsockname()[1]
-            state = vpnctl.create_state("127.0.0.1", "example.com:443", "example.com", port, ["test"], 1000)
-            vpnctl.save_state(state_path, state)
-            config = vpnctl.render_config(state)
-            vpnctl.write_json(config_path, config)
+            state = app_state_creation.create_state(
+                "127.0.0.1", "example.com:443", "example.com", port, ["test"], 1000
+            )
+            app_state_storage.save_state(state_path, state)
+            config = app_xray_rendering.render_config(state)
+            app_files.write_json(config_path, config)
             image = os.environ.get("XRAY_TEST_IMAGE", "ghcr.io/xtls/xray-core:26.10.31")
-            vpnctl.write_json(compose, {"services": {"xray": {
-                "image": image, "entrypoint": ["xray"],
-                "command": ["run", "-config", "/etc/xray/config.json"],
-                "read_only": True, "cap_drop": ["ALL"],
-                "security_opt": ["no-new-privileges:true"],
-                "volumes": [f"{config_path}:/etc/xray/config.json:ro"],
-                "ports": [f"127.0.0.1:{port}:{port}", "127.0.0.1:10085:10085"],
-            }}})
+            app_files.write_json(
+                compose,
+                {
+                    "services": {
+                        "xray": {
+                            "image": image,
+                            "entrypoint": ["xray"],
+                            "command": ["run", "-config", "/etc/xray/config.json"],
+                            "read_only": True,
+                            "cap_drop": ["ALL"],
+                            "security_opt": ["no-new-privileges:true"],
+                            "volumes": [f"{config_path}:/etc/xray/config.json:ro"],
+                            "ports": [
+                                f"127.0.0.1:{port}:{port}",
+                                "127.0.0.1:10085:10085",
+                            ],
+                        }
+                    }
+                },
+            )
             try:
-                vpnctl.deploy_config(state, state_path, config_path, compose, config, force=True)
-                first_epoch = vpnctl.runtime_epoch(compose)
-                vpnctl.sample_usage(state, compose)
-                vpnctl.save_state(state_path, state)
+                app_xray_deployment.deploy_config(
+                    state, state_path, config_path, compose, config, force=True
+                )
+                first_epoch = app_xray_runtime.runtime_epoch(compose)
+                app_accounting.sample_usage(state, compose)
+                app_state_storage.save_state(state_path, state)
                 state["profiles"][0]["clients"][0]["enabled"] = False
-                changed = vpnctl.render_config(state)
-                vpnctl.deploy_config(state, state_path, config_path, compose, changed)
-                self.assertNotEqual(first_epoch, vpnctl.runtime_epoch(compose))
-                self.assertEqual(vpnctl.load_json(config_path), changed)
-                second_epoch = vpnctl.runtime_epoch(compose)
+                changed = app_xray_rendering.render_config(state)
+                app_xray_deployment.deploy_config(
+                    state, state_path, config_path, compose, changed
+                )
+                self.assertNotEqual(
+                    first_epoch, app_xray_runtime.runtime_epoch(compose)
+                )
+                self.assertEqual(app_files.load_json(config_path), changed)
+                second_epoch = app_xray_runtime.runtime_epoch(compose)
                 invalid = copy.deepcopy(changed)
                 invalid["inbounds"][0]["protocol"] = "invalid"
                 with self.assertRaises(subprocess.CalledProcessError):
-                    vpnctl.deploy_config(state, state_path, config_path, compose, invalid)
-                self.assertEqual(second_epoch, vpnctl.runtime_epoch(compose))
-                self.assertEqual(vpnctl.load_json(config_path), changed)
-                verify = vpnctl.verify_xray
+                    app_xray_deployment.deploy_config(
+                        state, state_path, config_path, compose, invalid
+                    )
+                self.assertEqual(second_epoch, app_xray_runtime.runtime_epoch(compose))
+                self.assertEqual(app_files.load_json(config_path), changed)
+                verify = app_xray_runtime.verify_xray
                 checks = 0
 
                 def fail_once(compose_file, candidate):
                     nonlocal checks
                     checks += 1
                     if checks == 1:
-                        raise vpnctl.VpnctlError("injected health failure")
+                        raise app_errors.VpnctlError("injected health failure")
                     verify(compose_file, candidate)
 
                 state["profiles"][0]["clients"][0]["enabled"] = True
-                with patch.object(vpnctl, "verify_xray", side_effect=fail_once):
-                    with self.assertRaisesRegex(vpnctl.VpnctlError, "restored"):
-                        vpnctl.deploy_config(state, state_path, config_path, compose, vpnctl.render_config(state))
-                self.assertEqual(vpnctl.load_json(config_path), changed)
-                vpnctl.verify_xray(compose, changed)
-                recovered = vpnctl.load_state(state_path)
-                key = vpnctl.generate_reality_keys()["public_key"]
-                recovered["upstreams"]["ny"] = vpnctl.vpn_transports.parse_link(
+                with patch.object(
+                    app_xray_runtime, "verify_xray", side_effect=fail_once
+                ):
+                    with self.assertRaisesRegex(app_errors.VpnctlError, "restored"):
+                        app_xray_deployment.deploy_config(
+                            state,
+                            state_path,
+                            config_path,
+                            compose,
+                            app_xray_rendering.render_config(state),
+                        )
+                self.assertEqual(app_files.load_json(config_path), changed)
+                app_xray_runtime.verify_xray(compose, changed)
+                recovered = app_state_storage.load_state(state_path)
+                key = app_keys.generate_reality_keys()["public_key"]
+                recovered["upstreams"]["ny"] = vpn_transports.parse_link(
                     "vless://11111111-2222-3333-4444-555555555555@exit.example.com:443"
-                    f"?type=tcp&security=reality&pbk={key}&sid=abcd&sni=example.com")
-                recovered["routing_policies"]["failover"] = {"type": "priority", "upstreams": ["ny"]}
+                    f"?type=tcp&security=reality&pbk={key}&sid=abcd&sni=example.com"
+                )
+                recovered["routing_policies"]["failover"] = {
+                    "type": "priority",
+                    "upstreams": ["ny"],
+                }
                 recovered["profiles"][0]["route"] = "failover"
                 recovered["node"]["foreign_only"] = True
-                blocked = vpnctl.render_config(recovered)
-                self.assertNotIn("freedom", [item["protocol"] for item in blocked["outbounds"]])
-                vpnctl.deploy_config(recovered, state_path, config_path, compose, blocked)
-                vpnctl.verify_xray(compose, blocked)
+                blocked = app_xray_rendering.render_config(recovered)
+                self.assertNotIn(
+                    "freedom", [item["protocol"] for item in blocked["outbounds"]]
+                )
+                app_xray_deployment.deploy_config(
+                    recovered, state_path, config_path, compose, blocked
+                )
+                app_xray_runtime.verify_xray(compose, blocked)
             finally:
-                vpnctl.run_compose(compose, ["down", "--remove-orphans"], capture=True)
+                app_xray_runtime.run_compose(
+                    compose, ["down", "--remove-orphans"], capture=True
+                )

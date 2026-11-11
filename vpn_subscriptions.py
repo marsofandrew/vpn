@@ -1,3 +1,5 @@
+from vpn_manager.files import atomic_write
+
 """Standalone subscription artifacts; no runtime control or HTTP hosting.
 
 Client entries hold credentials and must be stored privately by the caller.
@@ -5,10 +7,8 @@ This module neither discovers local links nor checks runtime client registries.
 """
 
 import base64
-import os
-from pathlib import Path
 import re
-import tempfile
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import vpn_transports
@@ -109,38 +109,7 @@ def subscription_text(state: dict, client: str, local_links=()) -> str:
 
 
 def private_write(path, content: str) -> None:
-    """Atomically publish UTF-8 text with mode 0600 and no backup artifacts.
-
-    Write, flush and fsync a same-directory temporary file before replacement,
-    then fsync the parent directory. Failures before replacement preserve the
-    old destination. A directory-fsync failure after replacement propagates;
-    the new file is already visible, but crash durability is then uncertain.
-    """
+    """Publish private UTF-8 text atomically, without state backup policies."""
     if not isinstance(content, str):
         raise ValueError("content must be a string")
-    encoded = content.encode("utf-8")
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor: int | None
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        os.fchmod(descriptor, 0o600)
-        handle = os.fdopen(descriptor, "wb")
-        descriptor = None
-        with handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+    atomic_write(Path(path), content.encode("utf-8"))
