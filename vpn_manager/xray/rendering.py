@@ -117,7 +117,7 @@ def render_config(
     state: dict[str, Any], api_port: int = app_settings.DEFAULT_API_PORT
 ) -> dict[str, Any]:
     app_state_validation.validate_state(state, api_port)
-    config = copy.deepcopy(_RUNTIME_SETTINGS)
+    config: dict[str, Any] = copy.deepcopy(_RUNTIME_SETTINGS)
     config["inbounds"] = [
         render_vless_inbound(state, profile)
         for profile in app_state_model.all_profiles(state)

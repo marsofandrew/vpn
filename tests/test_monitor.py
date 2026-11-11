@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import vpn_monitor as monitor
+from vpn_manager.health import monitor
 
 
 class MonitorTests(unittest.TestCase):
@@ -63,7 +63,7 @@ class MonitorTests(unittest.TestCase):
         self.configs = []
 
     def mock(self, name, **kwargs):
-        patcher = patch("vpn_monitor." + name, **kwargs)
+        patcher = patch("vpn_manager.health.monitor." + name, **kwargs)
         value = patcher.start()
         self.addCleanup(patcher.stop)
         return value

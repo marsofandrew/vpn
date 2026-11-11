@@ -1,10 +1,12 @@
+import ssl
+import time
+
 """Offline tests: real HTTP parsing, in-memory SOCKS peers, mocked TLS boundary."""
 
 import copy
 import json
 import math
 import socket
-import ssl
 import unittest
 from contextlib import ExitStack
 from unittest.mock import Mock, patch
@@ -440,15 +442,15 @@ class ProbeTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.clock = Clock()
-        self.stack.enter_context(patch.object(health.time, "monotonic", self.clock))
+        self.stack.enter_context(patch.object(time, "monotonic", self.clock))
         self.sockets = []
         self.pending = []
         self.socket_factory = self.stack.enter_context(
-            patch.object(health.socket, "socket", side_effect=self.socket)
+            patch.object(socket, "socket", side_effect=self.socket)
         )
         self.stack.enter_context(
             patch.object(
-                health.socket,
+                socket,
                 "getaddrinfo",
                 side_effect=AssertionError("DNS forbidden"),
             )
@@ -456,9 +458,7 @@ class ProbeTests(unittest.TestCase):
         self.context = Mock()
         self.context.wrap_socket.side_effect = lambda sock, **kwargs: sock
         self.create_context = self.stack.enter_context(
-            patch.object(
-                health.ssl, "create_default_context", return_value=self.context
-            )
+            patch.object(ssl, "create_default_context", return_value=self.context)
         )
 
     def socket(self, family, kind):

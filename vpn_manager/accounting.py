@@ -58,7 +58,7 @@ def apply_usage_snapshot(
     accounting = state.setdefault("accounting", {"epoch": epoch, "checkpoints": {}})
     same_epoch = accounting.get("epoch") == epoch
     checkpoints = accounting.get("checkpoints", {}) if same_epoch else {}
-    deltas = {}
+    deltas: dict[str, dict[str, int]] = {}
     for email, traffic in counters.items():
         previous = checkpoints.get(email, {})
         deltas[email] = {}
