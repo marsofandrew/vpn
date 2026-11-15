@@ -55,6 +55,13 @@ def _text(value, field, empty=False):
     return value
 
 
+def _fingerprint(value):
+    fingerprint = _text(value, "fingerprint").lower()
+    if fingerprint not in _FINGERPRINTS:
+        raise ValueError("fingerprint is unsupported by the pinned Xray capability set")
+    return fingerprint
+
+
 def _port(value):
     if type(value) is not int or not 1 <= value <= 65535:
         raise ValueError("port must be an integer between 1 and 65535")

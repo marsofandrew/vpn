@@ -264,6 +264,20 @@ python3 vpnctl.py link phone
 python3 vpnctl.py link travel-phone --profile backup
 ```
 
+Export a REALITY link with a different client TLS fingerprint:
+
+```bash
+python3 vpnctl.py link phone --fingerprint safari
+python3 vpnctl.py link phone --fp firefox
+python3 vpnctl.py link phone --profile backup --fingerprint safari --qr --output qrcodes/safari
+```
+
+The override applies to this link and its QR code only. Existing links, the saved
+default, client identities, keys and RU → exit upstream settings are preserved.
+Omitting the option uses the existing default. The option supports TCP/REALITY
+and XHTTP/REALITY; TLS/CDN profiles reject it. The client app/core determines the
+actual browser preset and whether it works on a particular network.
+
 Generate a QR code:
 
 ```bash

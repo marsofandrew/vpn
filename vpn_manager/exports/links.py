@@ -10,15 +10,29 @@ from vpn_manager import errors as app_errors
 from vpn_manager import settings as app_settings
 from vpn_manager import values as app_values
 from vpn_manager.state import model as app_state_model
+from vpn_manager.transports.fields import _fingerprint
+
+_SERVER_FIELDS = (
+    "certificates",
+    "private_key",
+    "short_ids",
+    "target",
+    "ech_server_keys",
+)
 
 
 def generate_vless_link(
-    client: dict[str, Any], state: dict[str, Any], profile: dict[str, Any]
+    client: dict[str, Any],
+    state: dict[str, Any],
+    profile: dict[str, Any],
+    *,
+    fingerprint: str | None = None,
 ) -> str:
+    fingerprint = _fingerprint_override(profile, fingerprint)
     if profile.get("transport", {}).get("type", "tcp") != "tcp" or profile.get(
         "security"
     ):
-        return _extended_link(client, state, profile)
+        return _extended_link(client, state, profile, fingerprint)
     reality_host, _ = app_values.split_host_port(profile["reality_target"])
     server_host = app_values.validate_server_host(state["server_host"])
     params = {
@@ -26,7 +40,9 @@ def generate_vless_link(
         "encryption": "none",
         "security": "reality",
         "pbk": profile["keys"]["public_key"],
-        "fp": state.get("fingerprint", app_settings.DEFAULT_FINGERPRINT),
+        "fp": fingerprint
+        if fingerprint is not None
+        else state.get("fingerprint", app_settings.DEFAULT_FINGERPRINT),
         "sni": reality_host,
         "sid": profile["short_id"],
         "spx": state.get("spider_x", app_settings.DEFAULT_SPIDER_X),
@@ -37,7 +53,18 @@ def generate_vless_link(
     return f"vless://{client['id']}@{server_host}:{profile['port']}?{query}#{label}"
 
 
-def _extended_link(client, state, profile):
+def _fingerprint_override(profile, fingerprint):
+    if fingerprint is None:
+        return None
+    if profile.get("security", {}).get("type", "reality") != "reality":
+        raise app_errors.VpnctlError("fingerprint overrides require REALITY security")
+    try:
+        return _fingerprint(fingerprint)
+    except ValueError as error:
+        raise app_errors.VpnctlError(str(error)) from None
+
+
+def _client_security(state, profile, fingerprint):
     host, _ = app_values.split_host_port(profile["reality_target"])
     security = profile.get("security") or {
         "type": "reality",
@@ -49,23 +76,23 @@ def _extended_link(client, state, profile):
         },
     }
     security = {"type": security["type"], "settings": dict(security["settings"])}
-    for field in (
-        "certificates",
-        "private_key",
-        "short_ids",
-        "target",
-        "ech_server_keys",
-    ):
+    for field in _SERVER_FIELDS:
         security["settings"].pop(field, None)
+    if fingerprint is not None:
+        security["settings"]["fingerprint"] = fingerprint
     if profile.get("client_ech_config_list"):
         security["settings"]["ech_config_list"] = profile["client_ech_config_list"]
+    return security
+
+
+def _extended_link(client, state, profile, fingerprint):
     endpoint = {
         "protocol": "vless",
         "address": state["server_host"].strip("[]"),
         "port": profile["port"],
         "auth": {"id": client["id"], "encryption": "none", "flow": ""},
         "transport": profile["transport"],
-        "security": security,
+        "security": _client_security(state, profile, fingerprint),
         "enabled": True,
     }
     try:

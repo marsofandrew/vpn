@@ -1,12 +1,12 @@
 import uuid
 
 from vpn_manager.transports.fields import (
-    _FINGERPRINTS,
     _FLOWS,
     _MODES,
     _alpn,
     _authority,
     _ech_config,
+    _fingerprint,
     _host,
     _key,
     _object,
@@ -84,9 +84,7 @@ def _reality_server(ss, name):
 
 
 def _reality_client(ss, name):
-    fp = _text(ss.get("fingerprint", "chrome"), "fingerprint").lower()
-    if fp not in _FINGERPRINTS:
-        raise ValueError("fingerprint is unsupported by the pinned Xray capability set")
+    fp = _fingerprint(ss.get("fingerprint", "chrome"))
     result = {
         "server_name": name,
         "public_key": _key(ss["public_key"], "public_key"),

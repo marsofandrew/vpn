@@ -105,12 +105,14 @@ def command_client_enabled(
 
 def command_link(args: argparse.Namespace, *, persist, store) -> None:
     state = store.load(args.state)
-    if app_accounting.ensure_monthly_period(state):
-        persist(state, args.state, args.config)
     profile, client = app_state_model.require_client(
         state, args.name_or_id, args.profile
     )
-    link = app_exports_links.generate_vless_link(client, state, profile)
+    link = app_exports_links.generate_vless_link(
+        client, state, profile, fingerprint=args.fingerprint
+    )
+    if app_accounting.ensure_monthly_period(state):
+        persist(state, args.state, args.config)
     print(link)
     if args.qr:
         path = app_exports_links.write_qr(

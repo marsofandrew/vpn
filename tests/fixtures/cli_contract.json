@@ -2024,7 +2024,7 @@
       "children": {}
     },
     "link": {
-      "help": "usage: vpnctl.py link [-h] [--profile PROFILE] [--qr] [--output OUTPUT]\n                      name_or_id\n\npositional arguments:\n  name_or_id\n\noptions:\n  -h, --help         show this help message and exit\n  --profile PROFILE  VPN profile containing the client.\n  --qr               Write a QR code PNG.\n  --output OUTPUT    QR output directory.\n",
+      "help": "usage: vpnctl.py link [-h] [--profile PROFILE] [--fingerprint FINGERPRINT]\n                      [--qr] [--output OUTPUT]\n                      name_or_id\n\npositional arguments:\n  name_or_id\n\noptions:\n  -h, --help            show this help message and exit\n  --profile PROFILE     VPN profile containing the client.\n  --fingerprint, --fp FINGERPRINT\n                        Override the REALITY client fingerprint for this\n                        export, for example safari or firefox.\n  --qr                  Write a QR code PNG.\n  --output OUTPUT       QR output directory.\n",
       "actions": [
         {
           "options": [
@@ -2052,6 +2052,18 @@
             "--profile"
           ],
           "dest": "profile",
+          "default": null,
+          "required": false,
+          "nargs": null,
+          "choices": [],
+          "type": null
+        },
+        {
+          "options": [
+            "--fingerprint",
+            "--fp"
+          ],
+          "dest": "fingerprint",
           "default": null,
           "required": false,
           "nargs": null,

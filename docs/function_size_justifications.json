@@ -68,7 +68,6 @@
   "vpn_manager/cli/clients.py:command_client_list": "Formats one client table; keeping the parallel columns together makes the CLI output contract reviewable.",
   "vpn_manager/cli/inventory.py:command_inventory": "Adapts the three metadata CLI operations and their shared error boundary; runtime role checks stay beside the explicit with-runtime branch.",
   "vpn_manager/cli/parser.py:_register_profile_add": "Declares one profile-add command and its ordered argument/help contract; splitting the flag list would obscure that public surface.",
-  "vpn_manager/exports/links.py:_extended_link": "Projects one profile into a public endpoint while stripping server secrets before canonical export.",
   "vpn_manager/exports/subscriptions.py:subscription_text": "Assembles one subscription in its specified local-first and sorted-remote order, validating before emitting any artifact.",
   "vpn_manager/health/http.py:_url": "Parses one HTTPS destination and constructs its corresponding SOCKS address and HTTP request together.",
   "vpn_manager/health/measurement.py:probe_path": "Owns one probe result and its configuration/error boundary; network sampling is delegated to separate helpers.",

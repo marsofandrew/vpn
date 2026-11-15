@@ -515,6 +515,11 @@ def register_link(subparsers):
     link_parser = subparsers.add_parser("link", help="Print a VLESS link for a client.")
     link_parser.add_argument("name_or_id")
     link_parser.add_argument("--profile", help="VPN profile containing the client.")
+    link_parser.add_argument(
+        "--fingerprint",
+        "--fp",
+        help="Override the REALITY client fingerprint for this export, for example safari or firefox.",
+    )
     link_parser.add_argument("--qr", action="store_true", help="Write a QR code PNG.")
     link_parser.add_argument(
         "--output", type=Path, default=Path("qrcodes"), help="QR output directory."
